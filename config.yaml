@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+name: envio-indexer
+unordered_multichain_mode: false
+contracts:
+- name: ERC20
+  handler: src/ERC20.ts
+  events:
+  - event: Transfer(address indexed from, address indexed to, uint256 value)
+- name: ContangoProxy
+  handler: src/ContangoProxy.ts
+  events:
+  - event: InstrumentCreated(bytes16 indexed symbol, address base, address quote)
+  # - event: MoneyMarketRegistered(uint8 indexed id, address moneyMarket)
+  - event: PositionUpserted(bytes32 indexed positionId, address indexed owner, address indexed tradedBy, uint8 cashflowCcy, int256 cashflow, int256 quantityDelta, uint256 price, uint256 fee, uint8 feeCcy)
+  # - event: RewardsClaimed(bytes32 indexed positionId, address indexed to)
+  # - event: Upgraded(address indexed implementation)
+- name: Maestro
+  handler: src/Maestro.ts
+  events:
+  - event: FeeCollected(bytes32 indexed positionId, address indexed trader, address treasury, address token, uint256 amount, uint8 basisPoints)
+- name: PositionNFT
+  handler: src/ContangoProxy.ts
+  events:
+  - event: Transfer(address indexed from, address indexed to, uint256 indexed tokenId)
+- name: IMoneyMarket
+  handler: src/IMoneyMarket.ts
+  events:
+  - event: Borrowed(bytes32 indexed positionId, address indexed asset, uint256 amount, uint256 balanceBefore)
+  - event: Lent(bytes32 indexed positionId, address indexed asset, uint256 amount, uint256 balanceBefore)
+  - event: Repaid(bytes32 indexed positionId, address indexed asset, uint256 amount, uint256 balanceBefore)
+  - event: Withdrawn(bytes32 indexed positionId, address indexed asset, uint256 amount, uint256 balanceBefore)
+- name: UnderlyingPositionFactory
+  handler: src/ContangoProxy.ts
+  events:
+  - event: UnderlyingPositionCreated(address indexed account, bytes32 indexed positionId)
+- name: SpotExecutor
+  handler: src/SwapEvents.ts
+  events:
+  - event: SwapExecuted(address indexed tokenToSell, address indexed tokenToBuy, int256 amountIn, int256 amountOut, uint256 price)
+- name: SimpleSpotExecutor
+  handler: src/SwapEvents.ts
+  events:
+  - event: SwapExecuted(address indexed tokenToSell, address indexed tokenToBuy, uint256 amountIn, uint256 amountOut)
+- name: StrategyProxy
+  handler: src/StrategyProxy.ts
+  events:
+  - event: StragegyExecuted(address indexed user, bytes32 indexed action, bytes32 position1, bytes32 position2, bytes data)
+  - event: BeginStrategy(bytes32 indexed positionId, address indexed owner);
+  - event: EndStrategy(bytes32 indexed positionId, address indexed owner);
+- name: AaveLiquidations
+  handler: src/Liquidations/Aave.ts
+  events:
+  - event: LiquidationCall(address indexed collateralAsset, address indexed debtAsset, address indexed user, uint256 debtToCover, uint256 liquidatedCollateralAmount, address liquidator, bool receiveAToken)
+    name: LiquidateAave
+  - event: LiquidationCall(address indexed collateralAsset, address indexed debtAsset, address indexed user, uint256 debtToCover, uint256 liquidatedCollateralAmount, address liquidator, bool receiveAToken, bool useAToken)
+    name: LiquidateAgave
+  - event: LiquidationCall(address indexed collateral, address indexed principal, address indexed user, uint256 debtToCover, uint256 liquidatedCollateralAmount, address liquidator, bool receiveAToken, address liquidationFeeTo)
+    name: LiquidateRadiant
+- name: CompoundLiquidations
+  handler: src/Liquidations/Compound.ts
+  events:
+  - event: LiquidateBorrow(address liquidator, address borrower, uint256 repayAmount, address cTokenCollateral, uint256 seizeTokens)
+    name: LiquidateCompound
+- name: ExactlyLiquidations
+  handler: src/Liquidations/Exactly.ts
+  events:
+  - event: Liquidate(address indexed receiver, address indexed borrower, uint256 assets, uint256 lendersAssets, address indexed seizeMarket, uint256 seizedAssets)
+    name: LiquidateExactly
+- name: MorphoLiquidations
+  handler: src/Liquidations/Morpho.ts
+  events:
+  - event: Liquidate(bytes32 indexed id, address indexed caller, address indexed borrower, uint256 repaidAssets, uint256 repaidShares, uint256 seizedAssets, uint256 badDebtAssets, uint256 badDebtShares)
+    name: LiquidateMorpho
+- name: EulerLiquidations
+  handler: src/Liquidations/Euler.ts
+  events:
+  - event: Liquidate(address indexed liquidator, address indexed violator, address collateral, uint256 repayAssets, uint256 yieldBalance)
+    name: LiquidateEuler
+- name: SiloLiquidations
+  handler: src/Liquidations/Silo.ts
+  events:
+  - event: Liquidate(address indexed asset, address indexed user, uint256 shareAmountRepaid, uint256 seizedCollateral)
+    name: LiquidateSilo
+- name: CometLiquidations
+  handler: src/Liquidations/Comet.ts
+  events:
+  - event: AbsorbCollateral(address indexed absorber, address indexed borrower, address indexed asset, uint256 collateralAbsorbed, uint256 usdValue)
+    name: LiquidateComet1
+  - event: AbsorbDebt(address indexed absorber, address indexed borrower, uint256 basePaidOut, uint256 usdValue)
+    name: LiquidateComet2
+- name: DolomiteLiquidations
+  handler: src/Liquidations/Dolomite.ts
+  events:
+  - event: LogLiquidate(address indexed solidAccountOwner, uint256 solidAccountNumber, address indexed liquidAccountOwner, uint256 liquidAccountNumber, uint256 heldMarket, uint256 owedMarket, bool solidHeldUpdateSign, uint256 solidHeldUpdateValue, bool solidOwedUpdateSign, uint128 solidOwedUpdateValue, bool liquidHeldUpdateSign, uint256 liquidHeldUpdateValue, bool liquidOwedUpdateSign, uint128 liquidOwedUpdateValue)
+    name: LiquidateDolomite
+networks:
+- id: 59144 # Linea
+  start_block: 8030000
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
+rollback_on_reorg: false
+field_selection:
+  transaction_fields:
+    - "hash"
+    - "transactionIndex"
+    - "gasUsed"
+    - "from"
+    - "to"

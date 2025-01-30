@@ -1,0 +1,286 @@
+
+# enum AccountingType { Long, Short }
+
+type Lot {
+  id: ID!
+  chainId: Int!
+  positionId: String!
+  createdAtBlock: Int!
+  closedAtBlock: Int
+  createdAtTimestamp: Int!
+  createdAtTransactionHash: String!
+  accountingType: String! # AccountingType
+
+  size: BigInt! # net size (with funding profits included)
+  grossSize: BigInt! # size without funding profits
+
+  openCost: BigInt! # net cost (with funding cost included)
+  grossOpenCost: BigInt! # cost without funding cost
+
+  nextLotId: ID
+}
+
+# FillItemType = 'Trade' | 'Liquidation'
+
+type FillItem {
+  id: ID!
+  positionId: String!
+  chainId: Int!
+  transactionHash: String!
+  blockNumber: Int!
+  timestamp: Int!
+
+  lendingProfitToSettle: BigInt!
+  debtCostToSettle: BigInt!
+
+  collateralDelta: BigInt!
+  debtDelta: BigInt!
+
+  # these are absolute values. If the trade uses cashflow in quote, the cashflowQuote will be an non zero integer and the cashflowBase will be 0 and vice versa
+  # there are certain scenarios where we will have a cashflow in both quote and base, e.g closing into base and we have dust
+  cashflowQuote: BigInt!
+  cashflowBase: BigInt!
+
+  cashflowSwap: ContangoSwapEvent
+
+  tradePrice_long: BigInt!
+  tradePrice_short: BigInt!
+
+  fee: BigInt!
+  feeToken: Token
+
+  fillItemType: String!
+  liquidationPenalty: BigInt! # bps
+
+  realisedPnl_long: BigInt!
+  realisedPnl_short: BigInt!
+
+  fee_long: BigInt! # fee in debt ccy
+  fee_short: BigInt! # fee in collateral ccy
+}
+
+type Position {
+  id: ID! # CtxPositionId
+  chainId: Int!
+  owner: String!
+  isOpen: Boolean!
+  positionId: String!
+  createdAtBlock: Int!
+  createdAtTimestamp: Int!
+  createdAtTransactionHash: String!
+  instrument: Instrument!
+  proxyAddress: String!
+
+  collateral: BigInt! # this is the sum of the collateral deltas of all fills
+  accruedLendingProfit: BigInt! # this is the collateral balance with lending profit included
+
+  debt: BigInt! # this is the sum of the debt deltas of all fills
+  accruedInterest: BigInt! # this is the debt balance with interest accrued included
+
+  cashflowBase: BigInt! # sum of all cashflows in base ccy (absolute value, not "relative")
+  cashflowQuote: BigInt! # sum of all cashflows in quote ccy (absolute value, not "relative")
+
+  firstLotId_long: ID! # index of the first non-zero lot of the position (accounting type long)
+  firstLotId_short: ID! # index of the first non-zero lot of the position (accounting type short)
+
+  realisedPnl_long: BigInt!
+  realisedPnl_short: BigInt!
+
+  fees_long: BigInt!
+  fees_short: BigInt!
+}
+
+type Token {
+  id: ID! # `${chainId}_${address}`
+  address: String!
+  chainId: Int!
+  unit: BigInt!
+  decimals: Int!
+  symbol: String!
+  displaySymbol: String!
+}
+
+type Instrument {
+  id: ID!
+  chainId: Int!
+  instrumentId: String!
+  collateralToken: Token!
+  debtToken: Token!
+  closingOnly: Boolean!
+}
+
+# Raw events
+
+type UnderlyingPositionFactory_UnderlyingPositionCreated {
+  id: ID! # `[chainId]_[account]`
+  chainId: Int!
+  account: String!
+  positionId: String!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+}
+
+type PositionNFT_Transfer {
+  id: ID!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  chainId: Int!
+  from: String!
+  to: String!
+  tokenId: BigInt!
+}
+
+enum ContangoEventType {
+  DEBT
+  COLLATERAL
+  POSITION_UPSERTED
+  SWAP_EXECUTED
+  FEE_COLLECTED
+  MIGRATED
+  LIQUIDATION
+}
+
+type ContangoPositionUpsertedEvent {
+  id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.POSITION_UPSERTED}`
+  eventType: String!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  chainId: Int!
+  positionId: String!
+  owner: String!
+  tradedBy: String!
+  cashflowCcy: BigInt!
+  cashflow: BigInt!
+  quantityDelta: BigInt!
+  price: BigInt!
+  fee: BigInt!
+  feeCcy: BigInt!
+}
+
+type ContangoDebtEvent {
+  id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_ContangoDebtEvent`
+  eventType: String!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  chainId: Int!
+  positionId: String!
+  balanceBefore: BigInt!
+  debtDelta: BigInt!
+  asset: Token!
+}
+
+type ContangoCollateralEvent {
+  id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_ContangoCollateralEvent`
+  eventType: String!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  chainId: Int!
+  positionId: String!
+  balanceBefore: BigInt!
+  collateralDelta: BigInt!
+  asset: Token!
+}
+
+type ContangoSwapEvent {
+  id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.SWAP_EXECUTED}`
+  eventType: String!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  chainId: Int!
+  tokenIn: Token!
+  tokenOut: Token!
+  amountIn: BigInt!
+  amountOut: BigInt!
+}
+
+type ContangoFeeCollectedEvent {
+  id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.FEE_COLLECTED}`
+  eventType: String!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  chainId: Int!
+  positionId: String!
+  trader: String!
+  treasury: String!
+  token: Token!
+  amount: BigInt!
+  basisPoints: Int!
+}
+
+type ContangoPositionMigratedEvent {
+  id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.POSITION_MIGRATED}`
+  eventType: String!
+  chainId: Int!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  oldPositionId: String!
+  newPositionId: String!
+}
+
+type Liquidations_LiquidateComet1 {
+  id: ID!
+  chainId: Int!
+  absorber: String!
+  borrower: String!
+  asset: String!
+  collateralAbsorbed: BigInt!
+  usdValue: BigInt!
+}
+
+type ContangoLiquidationEvent {
+  id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.LIQUIDATION}`
+  eventType: String!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  chainId: Int!
+  proxy: String!
+  positionId: String!
+  tradedBy: String!
+  collateralTaken: BigInt!
+  debtRepaid: BigInt!
+  collateralBefore: BigInt!
+  debtBefore: BigInt!
+  markPrice: BigInt!
+  srcContract: String!
+}
+
+type ContangoInstrumentCreatedEvent {
+  id: ID!
+  chainId: Int!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  symbol: String!
+  base: String!
+  quote: String!
+}
+
+# internal mappings
+
+type FluidNftIdToUnderlyingPositionAccount {
+  id: ID! # `fluidNFT_${chainId}_${nftId}`
+  positionId: String!
+  account: String!
+}
+
+# marketId in the case of aave, and aave forks, is just the PoolProxy address.
+# for morpho, it's the marketId
+type ReserveDataUpdated {
+  id: ID! # `${chainId}_${tokenAddress}_${marketId}`
+  moneyMarket: String! # AaveV3 | ZeroLend | Unknown
+  timestamp: Int!
+  blockNumber: Int!
+  chainId: Int!
+  token: Token!
+  lendingIndex: BigInt!
+  borrowingIndex: BigInt!
+}
