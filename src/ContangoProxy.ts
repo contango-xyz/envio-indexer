@@ -22,7 +22,7 @@ import { createIdForLot, createIdForPosition, createStoreKey } from "./utils/ids
 import { strategyContractsAddresses } from "./utils/previousContractAddresses";
 import { ContangoEvents, EventType, GenericEvent } from "./utils/types";
 
-
+// deploy
 ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
   // in certain cases, the PositionUpserted event is the first indexed event emitted in the transaction
   const { block: { timestamp: blockTimestamp, number: blockNumber }, chainId, transaction: { hash: transactionHash } } = event
