@@ -30,25 +30,11 @@ const saveTokenIfDisplaySymbolHasChanged = (token: Token, context: handlerContex
   return token
 }
 
-export async function getOrCreateToken(
-  { address: _address, chainId, context }: { address: string; chainId: number; context: handlerContext; }
-): Promise<Token> {
-  const address = _address.toLowerCase()
-  // first check cache
+const getTokenDetails = async (address: string, chainId: number) => {
   const cache = Cache.init({ category: CacheCategory.Token, chainId });
   const token = cache.read(address);
-  
-  if (token) {
-    return saveTokenIfDisplaySymbolHasChanged(token, context)
-  }
 
-  // second check db
-  const storedToken = await context.Token.get(createTokenId({ chainId, address: address }));
-  if (storedToken) {
-    // add to cache for next time
-    cache.add({ [address]: storedToken });
-    return saveTokenIfDisplaySymbolHasChanged(storedToken, context)
-  }
+  if (token) return token
 
   const client = clients[chainId]
 
@@ -119,11 +105,34 @@ export async function getOrCreateToken(
     displaySymbol: symbolToDisplaySymbol({ address, symbol, chainId }),
   };
 
-  // save to db
-  context.Token.set(entry)
   // add to cache 
   cache.add({ [address]: entry });
 
+  return entry
+}
 
-  return entry;
+export async function getOrCreateToken(
+  { address: _address, chainId, context }: { address: string; chainId: number; context: handlerContext; }
+): Promise<Token> {
+  const address = _address.toLowerCase()
+
+  // second check db
+  const storedToken = await context.Token.get(createTokenId({ chainId, address: address }));
+  if (storedToken) {
+    // add to cache for next time
+    return saveTokenIfDisplaySymbolHasChanged(storedToken, context)
+  }
+
+  const token = await getTokenDetails(address, chainId)
+
+  // save to db
+  context.Token.set(token)
+
+  return token;
+}
+
+export const getTokenOrThrow = async ({ id, context }: { id: string; context: handlerContext; }) => {
+  const token = await context.Token.get(id)
+  if (!token) throw new Error(`Token ${id} not found`)
+  return token
 }

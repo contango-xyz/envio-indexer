@@ -2,6 +2,11 @@
 name: envio-indexer
 unordered_multichain_mode: false
 contracts:
+- name: WETH
+  handler: src/ERC20.ts
+  events:
+  - event: Deposit(address indexed dst, uint wad)
+  - event: Withdrawal(address indexed src, uint wad)
 - name: ERC20
   handler: src/ERC20.ts
   events:
@@ -94,23 +99,25 @@ contracts:
   - event: LogLiquidate(address indexed solidAccountOwner, uint256 solidAccountNumber, address indexed liquidAccountOwner, uint256 liquidAccountNumber, uint256 heldMarket, uint256 owedMarket, bool solidHeldUpdateSign, uint256 solidHeldUpdateValue, bool solidOwedUpdateSign, uint128 solidOwedUpdateValue, bool liquidHeldUpdateSign, uint256 liquidHeldUpdateValue, bool liquidOwedUpdateSign, uint128 liquidOwedUpdateValue)
     name: LiquidateDolomite
 networks:
-- id: 59144 # Linea
-  start_block: 8030000
+- id: 42161 # Arbitrum
+  start_block: 137136154
   contracts:
   - name: ContangoProxy
-    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+    address: ${CONTANGO_PROXY_ADDRESS}
   - name: PositionNFT
-    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+    address: ${POSITION_NFT_ADDRESS}
   - name: StrategyProxy
-    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+    address: ${STRATEGY_PROXY_ADDRESS}
   - name: UnderlyingPositionFactory
-    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+    address: ${UNDERLYING_POSITION_FACTORY_ADDRESS}
   - name: Maestro
-    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+    address: ${MAESTRO_ADDRESS}
   - name: SimpleSpotExecutor
   - name: SpotExecutor
   - name: IMoneyMarket
   - name: ERC20
+  - name: WETH
+    address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
   - name: AaveLiquidations
   - name: CompoundLiquidations
   - name: ExactlyLiquidations
@@ -123,7 +130,4 @@ rollback_on_reorg: false
 field_selection:
   transaction_fields:
     - "hash"
-    - "transactionIndex"
-    - "gasUsed"
     - "from"
-    - "to"

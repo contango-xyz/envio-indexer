@@ -1,7 +1,7 @@
 import { ContangoSwapEvent, FillItem, SimpleSpotExecutor, SpotExecutor, handlerContext } from "generated";
 import { eventStore } from "./Store";
 import { getPairForPositionId } from "./utils/common";
-import { getOrCreateToken } from "./utils/getTokenDetails";
+import { getOrCreateToken, getTokenOrThrow } from "./utils/getTokenDetails";
 import { EventId, createEventId } from "./utils/ids";
 import { absolute, mulDiv } from "./utils/math-helpers";
 import { EventType } from "./utils/types";
@@ -11,8 +11,8 @@ export const addSwapsToFillItem = async ({ swapEvents, fillItem, context }: { sw
   const newFillItem = { ...fillItem }
   for (const swapEvent of swapEvents) {
     const [tokenIn, tokenOut] = await Promise.all([
-      getOrCreateToken({ chainId: swapEvent.chainId, address: swapEvent.tokenIn_id, context }),
-      getOrCreateToken({ chainId: swapEvent.chainId, address: swapEvent.tokenOut_id, context }),
+      getTokenOrThrow({ id: swapEvent.tokenIn_id, context }),
+      getTokenOrThrow({ id: swapEvent.tokenOut_id, context }),
     ])
 
     const { debtToken, collateralToken } = await getPairForPositionId({ chainId: swapEvent.chainId, positionId: fillItem.positionId, context: context })
@@ -51,8 +51,8 @@ const addSwapToFillItem = async ({ swapEvent, context }: { swapEvent: ContangoSw
 
 SpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
   const [tokenIn, tokenOut] = await Promise.all([
-    getOrCreateToken({ chainId: event.chainId, address: event.params.tokenToSell, context }),
-    getOrCreateToken({ chainId: event.chainId, address: event.params.tokenToBuy, context }),
+    getTokenOrThrow({ id: event.params.tokenToSell, context }),
+    getTokenOrThrow({ id: event.params.tokenToBuy, context }),
   ])
 
   const { chainId, block: { timestamp: blockTimestamp, number: blockNumber }, transaction: { hash: transactionHash }, logIndex } = event

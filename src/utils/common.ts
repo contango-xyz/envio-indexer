@@ -1,4 +1,4 @@
-import { Position, Token, handlerContext } from "generated";
+import { Instrument, Position, Token, handlerContext } from "generated";
 import { Hex, getContract, parseAbi } from "viem";
 import { createInstrumentId } from "../ContangoProxy";
 import { eventStore } from "../Store";
@@ -7,6 +7,7 @@ import { Cache, CacheCategory } from "./cache";
 import { decodeTokenId, getOrCreateToken } from "./getTokenDetails";
 import { createIdForPosition } from "./ids";
 import { ReturnPromiseType } from "./types";
+import { contangoAbi } from "../abis";
 
 
 export const lensAbi = parseAbi([
@@ -47,17 +48,44 @@ export const getBalancesAtBlock = async (chainId: number, positionId: Hex, block
   return balancesFromChain
 }
 
-export const getInstrument = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext }) => {
-  const instrumentId = positionId.slice(0, 34)
+const getInstrument = async (chainId: number, positionId: string) => {
+  const instrumentId = positionId.slice(0, 34) as Hex
   const cached = Cache.init({ category: CacheCategory.Instrument, chainId })
   const instrument = cached.read(instrumentId)
-
   if (instrument) return instrument
 
+  const contangoProxy = getContract({
+    abi: contangoAbi,
+    address: "0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E",
+    client: clients[chainId]
+  })
+
+  const chainInstrument = await contangoProxy.read.instrument([instrumentId])
+
+  const entity: Instrument = {
+    id: createInstrumentId({ chainId, instrumentId }),
+    chainId,
+    instrumentId,
+    collateralToken_id: chainInstrument.base,
+    debtToken_id: chainInstrument.quote,
+    closingOnly: chainInstrument.closingOnly,
+  }
+
+  cached.add({ [instrumentId]: entity })
+
+  return entity
+}
+
+export const getOrCreateInstrument = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext }) => {
+  const instrumentId = positionId.slice(0, 34)
+
   const storedInstrument = await context.Instrument.get(createInstrumentId({ chainId, instrumentId }))
-  cached.add({ [instrumentId]: storedInstrument })
   if (storedInstrument) return storedInstrument
-  throw new Error(`Instrument ${instrumentId} not found in db`)
+
+  const instrument = await getInstrument(chainId, positionId)
+  context.Instrument.set(instrument)
+
+  return instrument
 }
 
 export const getPairForPositionId = async (
@@ -67,7 +95,7 @@ export const getPairForPositionId = async (
   const tokenPair = cached.read(positionId)
   if (tokenPair) return tokenPair
 
-  const instrument = await getInstrument({ chainId, positionId, context })
+  const instrument = await getOrCreateInstrument({ chainId, positionId, context })
 
   const [collateralToken, debtToken] = await Promise.all([
     getOrCreateToken({ ...decodeTokenId(instrument.collateralToken_id), context }),
