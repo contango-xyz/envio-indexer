@@ -82,7 +82,7 @@ export const getOrCreateInstrument = async ({ chainId, positionId, context }: { 
   const storedInstrument = await context.Instrument.get(createInstrumentId({ chainId, instrumentId }))
   if (storedInstrument) return storedInstrument
 
-  const instrument = await getInstrument(chainId, positionId)
+  const instrument = await getInstrument(chainId, instrumentId)
   context.Instrument.set(instrument)
 
   return instrument

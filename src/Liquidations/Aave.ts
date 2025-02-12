@@ -9,10 +9,10 @@ import {
 import { getContract, Hex, parseAbi } from "viem";
 import { clients } from "../clients";
 import { positionIdMapper } from "../utils/mappers";
-import { mulDiv } from "../utils/math-helpers";
+import { max, mulDiv } from "../utils/math-helpers";
 import { getMarkPrice, getPositionIdForProxyAddress, createLiquidationFillItem } from "./common";
 import { createLiquidationId } from "../utils/ids";
-import { getBalancesAtBlock } from "../utils/common";
+import { getBalancesAtBlock, getPosition } from "../utils/common";
 import { EventType, MoneyMarket } from "../utils/types";
 
 // Aave
@@ -85,6 +85,7 @@ type LiquidationEvent = AaveLiquidations_LiquidateAave_event | AaveLiquidations_
 const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsset: string, context: handlerContext) => {
   const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.user, context })
   if (positionId) {
+    const position = await getPosition({ chainId: event.chainId, positionId, context })
     const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
     const aaveLiquidationEvent = await processAaveLiquidationEvents({
       chainId: event.chainId,
@@ -103,12 +104,15 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
     })
 
     const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, context })
-    
+
+    const collateralBefore = max(balancesBefore.collateral, position.collateral)
+    const debtBefore = max(balancesBefore.debt, position.debt)
+
     const liquidationEvent: ContangoLiquidationEvent = {
       eventType: EventType.LIQUIDATION,
       ...aaveLiquidationEvent,
-      collateralBefore: balancesBefore.collateral,
-      debtBefore: balancesBefore.debt,
+      collateralBefore,
+      debtBefore,
       blockTimestamp: event.block.timestamp,
       transactionHash: event.transaction.hash,
       markPrice,

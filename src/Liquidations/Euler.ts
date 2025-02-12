@@ -6,8 +6,9 @@ import { getContract, Hex, parseAbi } from "viem";
 import { clients } from "../clients";
 import { getMarkPrice, getPositionIdForProxyAddress, createLiquidationFillItem } from "./common";
 import { createLiquidationId } from "../utils/ids";
-import { getBalancesAtBlock } from "../utils/common";
+import { getBalancesAtBlock, getPosition } from "../utils/common";
 import { EventType } from "../utils/types";
+import { max } from "../utils/math-helpers";
 
 const eulerAbi = parseAbi(["function convertToAssets(uint256 shares) external view returns (uint256 assets)"])
 
@@ -21,7 +22,11 @@ EulerLiquidations.LiquidateEuler.handler(async ({ event, context }) => {
       client: clients[event.chainId],
     }).read.convertToAssets([event.params.yieldBalance], { blockNumber: BigInt(event.block.number) })
     const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
+    const position = await getPosition({ chainId: event.chainId, positionId, context })
     const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, context })
+
+    const collateralBefore = max(balancesBefore.collateral, position.collateral)
+    const debtBefore = max(balancesBefore.debt, position.debt)
     
     const liquidationEvent: ContangoLiquidationEvent = {
       id: createLiquidationId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex }),
@@ -35,8 +40,8 @@ EulerLiquidations.LiquidateEuler.handler(async ({ event, context }) => {
       blockNumber: event.block.number,
       blockTimestamp: event.block.timestamp,
       transactionHash: event.transaction.hash,
-      collateralBefore: balancesBefore.collateral,
-      debtBefore: balancesBefore.debt,
+      collateralBefore,
+      debtBefore,
       markPrice,
       srcContract: event.srcAddress,
     }
