@@ -3,7 +3,8 @@ import { Hex, decodeAbiParameters, parseAbiParameters, toHex } from "viem";
 import { createEventId } from "./utils/ids";
 import { EventType } from "./utils/types";
 import { getOrCreateToken } from "./utils/getTokenDetails";
-import { addFeeEventToFillItem } from "./Maestro";
+import { eventStore } from "./Store";
+import { eventsReducer } from "./accounting/processEvents";
 
 export const decodeFeeEvent = (data: Hex) => {
   const [treasury, token, addressReceivingFees, amount, basisPoints] = decodeAbiParameters(
@@ -19,9 +20,9 @@ StrategyProxy.StragegyExecuted.handler(async ({ event, context }) => {
   if (action === toHex("FeeCollected", { size: 32 })) {
     const decoded = decodeFeeEvent(event.params.data as Hex)
     const token = await getOrCreateToken({ chainId: event.chainId, address: decoded.token, context })
+    const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.FEE_COLLECTED })
     const entity: ContangoFeeCollectedEvent = {
-      id: createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.FEE_COLLECTED }),
-      eventType: EventType.FEE_COLLECTED,
+      id: eventId,
       chainId: event.chainId,
       positionId: event.params.position1,
       trader: event.params.user,
@@ -35,13 +36,26 @@ StrategyProxy.StragegyExecuted.handler(async ({ event, context }) => {
     }
 
     context.ContangoFeeCollectedEvent.set(entity)
-    await addFeeEventToFillItem({ feeEvent: entity, context })
+    eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.FEE_COLLECTED } })
+
+    // fee is possibly the last event in the tx
+    await eventsReducer(
+      {
+        chainId: event.chainId,
+        blockNumber: event.block.number,
+        transactionHash: event.transaction.hash,
+        positionId: event.params.position1,
+        blockTimestamp: event.block.timestamp,
+        logIndex: event.logIndex,
+      },
+      context,
+    )
   }
 
   if (action === toHex("PositionMigrated", { size: 32 })) {
+    const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.MIGRATED })
     const entity: ContangoPositionMigratedEvent = {
-      id: createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.MIGRATED }),
-      eventType: EventType.MIGRATED,
+      id: eventId,
       chainId: event.chainId,
       oldPositionId: event.params.position1,
       newPositionId: event.params.position2,
@@ -50,6 +64,18 @@ StrategyProxy.StragegyExecuted.handler(async ({ event, context }) => {
       transactionHash: event.transaction.hash,
     }
     context.ContangoPositionMigratedEvent.set(entity)
-  }
+    eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.MIGRATED } })
 
+    await eventsReducer(
+      {
+        chainId: event.chainId,
+        blockNumber: event.block.number,
+        transactionHash: event.transaction.hash,
+        positionId: event.params.position1,
+        blockTimestamp: event.block.timestamp,
+        logIndex: event.logIndex,
+      },
+      context,
+    )
+  }
 })

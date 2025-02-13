@@ -7,13 +7,14 @@ import {
   handlerContext
 } from "generated";
 import { getContract, Hex, parseAbi } from "viem";
+import { eventsReducer } from "../accounting/processEvents";
 import { clients } from "../clients";
+import { getBalancesAtBlock, getPairForPositionId, getPosition } from "../utils/common";
+import { createLiquidationId } from "../utils/ids";
 import { positionIdMapper } from "../utils/mappers";
 import { max, mulDiv } from "../utils/math-helpers";
-import { getMarkPrice, getPositionIdForProxyAddress, createLiquidationFillItem } from "./common";
-import { createLiquidationId } from "../utils/ids";
-import { getBalancesAtBlock, getPosition } from "../utils/common";
-import { EventType, MoneyMarket } from "../utils/types";
+import { MoneyMarket } from "../utils/types";
+import { getLiquidationPenalty, getMarkPrice, getPositionIdForProxyAddress } from "./common";
 
 // Aave
 export function getLiquidationBonus(data: bigint): bigint {
@@ -48,7 +49,7 @@ const aaveAbi = parseAbi([
 
 export const processAaveLiquidationEvents = async (
 { chainId, positionId, txHash, logIndex, collateralAsset, liquidationContractAddress, blockNumber, liquidatedCollateralAmount, debtToCover, liquidator, user, isV3 }: { chainId: number; positionId: Hex; txHash: Hex; logIndex: number; collateralAsset: Hex; liquidationContractAddress: Hex; blockTimestamp: number; blockNumber: bigint; liquidatedCollateralAmount: bigint; debtToCover: bigint; liquidator: Hex; user: Hex; isV3: boolean; },
-): Promise<Omit<ContangoLiquidationEvent, 'srcContract' | 'markPrice' | 'eventType' | 'debtBefore' | 'collateralBefore' | 'blockTimestamp' | 'transactionHash'>> => {
+): Promise<Omit<ContangoLiquidationEvent, 'liquidationPenalty' | 'markPrice' | 'eventType' | 'debtCostToSettle' | 'lendingProfitToSettle' | 'blockTimestamp' | 'transactionHash'>> => {
   const client = clients[chainId]
 
   const pool = getContract({ abi: aaveAbi, address: liquidationContractAddress as Hex, client })
@@ -70,10 +71,8 @@ export const processAaveLiquidationEvents = async (
     id: createLiquidationId({ chainId, blockNumber: Number(blockNumber), transactionHash: txHash, logIndex: Number(logIndex) }),
     chainId,
     positionId,
-    collateralTaken,
-    debtRepaid: debtToCover,
-    tradedBy: liquidator.toLowerCase() as Hex,
-    proxy: user.toLowerCase() as Hex,
+    collateralDelta: -collateralTaken,
+    debtDelta: -debtToCover,
     blockNumber: Number(blockNumber),
   }
 }
@@ -105,22 +104,44 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
 
     const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, context })
 
-    const collateralBefore = max(balancesBefore.collateral, position.collateral)
-    const debtBefore = max(balancesBefore.debt, position.debt)
+    console.log('position', position)
 
-    const liquidationEvent: ContangoLiquidationEvent = {
-      eventType: EventType.LIQUIDATION,
-      ...aaveLiquidationEvent,
-      collateralBefore,
-      debtBefore,
-      blockTimestamp: event.block.timestamp,
-      transactionHash: event.transaction.hash,
-      markPrice,
-      srcContract: event.srcAddress,
+    try {
+      const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
+      const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
+      const { collateralToken } = await getPairForPositionId({ chainId: event.chainId, positionId, context })
+  
+      const liquidationEvent: ContangoLiquidationEvent = {
+        ...aaveLiquidationEvent,
+        lendingProfitToSettle,
+        debtCostToSettle,
+        blockTimestamp: event.block.timestamp,
+        transactionHash: event.transaction.hash,
+        liquidationPenalty: getLiquidationPenalty({
+          collateralToken,
+          collateralDelta: aaveLiquidationEvent.collateralDelta,
+          debtDelta: aaveLiquidationEvent.debtDelta,
+          markPrice,
+        }),
+      }
+      context.ContangoLiquidationEvent.set(liquidationEvent)
+  
+      await eventsReducer(
+        {
+          chainId: event.chainId,
+          blockNumber: event.block.number,
+          transactionHash: event.transaction.hash,
+          logIndex: event.logIndex,
+          positionId,
+          blockTimestamp: event.block.timestamp,
+        },
+        context
+      )
+    } catch (e) {
+      console.error(e)
+      context.log.debug(`Error processing liquidation for positionId: ${positionId} balancesBefore: ${balancesBefore.collateral} ${balancesBefore.debt} position: ${position.collateral} ${position.debt}`)
     }
-    context.ContangoLiquidationEvent.set(liquidationEvent)
 
-    await createLiquidationFillItem({ liquidationEvent, context })
   }
 }
 

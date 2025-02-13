@@ -101,6 +101,7 @@ contracts:
 networks:
 - id: 42161 # Arbitrum
   start_block: 137136154
+  end_block: 144524437
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E

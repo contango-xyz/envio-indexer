@@ -3,12 +3,12 @@ import {
   EulerLiquidations
 } from "generated";
 import { getContract, Hex, parseAbi } from "viem";
+import { eventsReducer } from "../accounting/processEvents";
 import { clients } from "../clients";
-import { getMarkPrice, getPositionIdForProxyAddress, createLiquidationFillItem } from "./common";
+import { getBalancesAtBlock, getPairForPositionId, getPosition } from "../utils/common";
 import { createLiquidationId } from "../utils/ids";
-import { getBalancesAtBlock, getPosition } from "../utils/common";
-import { EventType } from "../utils/types";
 import { max } from "../utils/math-helpers";
+import { getLiquidationPenalty, getMarkPrice, getPositionIdForProxyAddress } from "./common";
 
 const eulerAbi = parseAbi(["function convertToAssets(uint256 shares) external view returns (uint256 assets)"])
 
@@ -25,28 +25,35 @@ EulerLiquidations.LiquidateEuler.handler(async ({ event, context }) => {
     const position = await getPosition({ chainId: event.chainId, positionId, context })
     const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, context })
 
-    const collateralBefore = max(balancesBefore.collateral, position.collateral)
-    const debtBefore = max(balancesBefore.debt, position.debt)
+    const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
+    const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
+    const { collateralToken } = await getPairForPositionId({ chainId: event.chainId, positionId, context })
     
     const liquidationEvent: ContangoLiquidationEvent = {
       id: createLiquidationId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex }),
-      eventType: EventType.LIQUIDATION,
       chainId: event.chainId,
       positionId,
-      collateralTaken,
-      debtRepaid: event.params.repayAssets,
-      tradedBy: event.params.liquidator,
-      proxy: event.params.violator,
+      collateralDelta: -collateralTaken,
+      debtDelta: -event.params.repayAssets,
       blockNumber: event.block.number,
       blockTimestamp: event.block.timestamp,
       transactionHash: event.transaction.hash,
-      collateralBefore,
-      debtBefore,
-      markPrice,
-      srcContract: event.srcAddress,
+      lendingProfitToSettle,
+      debtCostToSettle,
+      liquidationPenalty: getLiquidationPenalty({ collateralToken, collateralDelta: collateralTaken, debtDelta: event.params.repayAssets, markPrice }),
     }
     context.ContangoLiquidationEvent.set(liquidationEvent)
 
-    await createLiquidationFillItem({ liquidationEvent, context })
+    await eventsReducer(
+      {
+        chainId: event.chainId,
+        blockNumber: event.block.number,
+        transactionHash: event.transaction.hash,
+        logIndex: event.logIndex,
+        positionId,
+        blockTimestamp: event.block.timestamp,
+      },
+      context
+    )
   }
 }, { wildcard: true });

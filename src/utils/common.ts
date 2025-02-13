@@ -1,14 +1,14 @@
-import { Instrument, Position, Token, handlerContext } from "generated";
+import { Instrument, Lot, Position, Token, handlerContext } from "generated";
 import { Hex, getContract, parseAbi } from "viem";
 import { createInstrumentId } from "../ContangoProxy";
 import { eventStore } from "../Store";
+import { contangoAbi } from "../abis";
+import { loadLots, saveLots } from "../accounting/lotsAccounting";
 import { clients } from "../clients";
 import { Cache, CacheCategory } from "./cache";
 import { decodeTokenId, getOrCreateToken } from "./getTokenDetails";
 import { createIdForPosition } from "./ids";
 import { ReturnPromiseType } from "./types";
-import { contangoAbi } from "../abis";
-
 
 export const lensAbi = parseAbi([
   "struct Balances { uint256 collateral; uint256 debt; }",
@@ -71,7 +71,7 @@ const getInstrument = async (chainId: number, positionId: string) => {
     closingOnly: chainInstrument.closingOnly,
   }
 
-  cached.add({ [instrumentId]: entity })
+  cached.add({ [`${instrumentId}-${chainId}`]: entity })
 
   return entity
 }
@@ -91,23 +91,22 @@ export const getOrCreateInstrument = async ({ chainId, positionId, context }: { 
 export const getPairForPositionId = async (
   { positionId, context, chainId }: { chainId: number; positionId: string; context: handlerContext }
 ): Promise<{ collateralToken: Token; debtToken: Token }> => {
-  const cached = Cache.init({ category: CacheCategory.TokenPair, chainId: positionId })
-  const tokenPair = cached.read(positionId)
-  if (tokenPair) return tokenPair
-
   const instrument = await getOrCreateInstrument({ chainId, positionId, context })
 
-  const [collateralToken, debtToken] = await Promise.all([
-    getOrCreateToken({ ...decodeTokenId(instrument.collateralToken_id), context }),
-    getOrCreateToken({ ...decodeTokenId(instrument.debtToken_id), context }),
-  ])
-
-  if (!collateralToken) throw new Error(`Token not found for ${instrument.collateralToken_id} positionId: ${positionId}`)
-  if (!debtToken) throw new Error(`Token not found for ${instrument.debtToken_id} positionId: ${positionId}`)
-
-  cached.add({ [positionId]: { collateralToken, debtToken } })
-
-  return { collateralToken, debtToken }
+  try {
+    const [collateralToken, debtToken] = await Promise.all([
+      getOrCreateToken({ address: instrument.collateralToken_id, chainId, context }),
+      getOrCreateToken({ address: instrument.debtToken_id, chainId, context }),
+    ])
+  
+    if (!collateralToken) throw new Error(`Token not found for ${instrument.collateralToken_id} positionId: ${positionId}`)
+    if (!debtToken) throw new Error(`Token not found for ${instrument.debtToken_id} positionId: ${positionId}`)
+  
+    return { collateralToken, debtToken }
+  } catch (e) {
+    context.log.error(`Error getting pair for positionId: ${positionId} - instrument: ${instrument.id} ${instrument.collateralToken_id} ${instrument.debtToken_id}`)
+    throw e
+  }
 }
 
 
@@ -115,6 +114,21 @@ export const getPosition = async ({ chainId, positionId, context }: { chainId: n
   const position = await context.Position.get(createIdForPosition({ chainId, positionId }))
   if (!position) throw new Error(`Position not found for ${createIdForPosition({ chainId, positionId })}`)
   return { ...position }
+}
+
+// always get the snapshot of the position, as it was BEFORE the transaction was processed
+export const getPositionSnapshot = async (
+  { chainId, positionId, blockNumber, transactionHash, context }: { blockNumber: number; transactionHash: string; chainId: number; positionId: string; context: handlerContext }
+) => {
+  const snapshotFromStore = eventStore.getCurrentPosition({ chainId, blockNumber, transactionHash })
+  if (snapshotFromStore) return snapshotFromStore
+
+  const position = await getPosition({ chainId, positionId, context })
+  const lots = await loadLots({ position, context })
+
+  eventStore.setCurrentPosition({ position, lots, blockNumber, transactionHash })
+
+  return { position, lots }
 }
 
 export const getPositionSafe = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext }) => {
@@ -127,8 +141,9 @@ export const getPositionSafe = async ({ chainId, positionId, context }: { chainI
 
 export const setPosition = (
   position: Position,
+  lots: { longLots: Lot[]; shortLots: Lot[] },
   { blockNumber, transactionHash, context }: { blockNumber: number; transactionHash: string; context: handlerContext; }
 ) => {
-  eventStore.setCurrentPosition({ position, blockNumber, transactionHash })
   context.Position.set(position)
+  saveLots({ lots: [...lots.longLots, ...lots.shortLots], context })
 }

@@ -3,6 +3,7 @@
 
 type Lot {
   id: ID!
+  owner: String! @index
   chainId: Int!
   positionId: String!
   createdAtBlock: Int!
@@ -10,6 +11,8 @@ type Lot {
   createdAtTimestamp: Int!
   createdAtTransactionHash: String!
   accountingType: String! # AccountingType
+
+  cashflowInCollateralToken: BigInt! # sum of all cashflows in collateral token ("relative" value)
 
   size: BigInt! # net size (with funding profits included)
   grossSize: BigInt! # size without funding profits
@@ -40,6 +43,8 @@ type FillItem {
   # there are certain scenarios where we will have a cashflow in both quote and base, e.g closing into base and we have dust
   cashflowQuote: BigInt!
   cashflowBase: BigInt!
+  cashflow: BigInt!
+  cashflowToken: Token!
 
   cashflowSwap: ContangoSwapEvent
 
@@ -62,7 +67,7 @@ type FillItem {
 type Position {
   id: ID! # CtxPositionId
   chainId: Int!
-  owner: String!
+  owner: String! @index
   isOpen: Boolean!
   positionId: String!
   createdAtBlock: Int!
@@ -144,7 +149,6 @@ enum ContangoEventType {
 
 type ContangoPositionUpsertedEvent {
   id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.POSITION_UPSERTED}`
-  eventType: String!
   blockNumber: Int!
   blockTimestamp: Int!
   transactionHash: String!
@@ -162,7 +166,6 @@ type ContangoPositionUpsertedEvent {
 
 type ContangoDebtEvent {
   id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_ContangoDebtEvent`
-  eventType: String!
   blockNumber: Int!
   blockTimestamp: Int!
   transactionHash: String!
@@ -175,7 +178,6 @@ type ContangoDebtEvent {
 
 type ContangoCollateralEvent {
   id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_ContangoCollateralEvent`
-  eventType: String!
   blockNumber: Int!
   blockTimestamp: Int!
   transactionHash: String!
@@ -188,7 +190,6 @@ type ContangoCollateralEvent {
 
 type ContangoSwapEvent {
   id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.SWAP_EXECUTED}`
-  eventType: String!
   blockNumber: Int!
   blockTimestamp: Int!
   transactionHash: String!
@@ -201,7 +202,6 @@ type ContangoSwapEvent {
 
 type ContangoFeeCollectedEvent {
   id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.FEE_COLLECTED}`
-  eventType: String!
   blockNumber: Int!
   blockTimestamp: Int!
   transactionHash: String!
@@ -216,7 +216,6 @@ type ContangoFeeCollectedEvent {
 
 type ContangoPositionMigratedEvent {
   id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.POSITION_MIGRATED}`
-  eventType: String!
   chainId: Int!
   blockNumber: Int!
   blockTimestamp: Int!
@@ -237,20 +236,16 @@ type Liquidations_LiquidateComet1 {
 
 type ContangoLiquidationEvent {
   id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.LIQUIDATION}`
-  eventType: String!
   blockNumber: Int!
   blockTimestamp: Int!
   transactionHash: String!
   chainId: Int!
-  proxy: String!
   positionId: String!
-  tradedBy: String!
-  collateralTaken: BigInt!
-  debtRepaid: BigInt!
-  collateralBefore: BigInt!
-  debtBefore: BigInt!
-  markPrice: BigInt!
-  srcContract: String!
+  collateralDelta: BigInt!
+  debtDelta: BigInt!
+  lendingProfitToSettle: BigInt!
+  debtCostToSettle: BigInt!
+  liquidationPenalty: BigInt!
 }
 
 type ContangoInstrumentCreatedEvent {
@@ -262,25 +257,4 @@ type ContangoInstrumentCreatedEvent {
   symbol: String!
   base: String!
   quote: String!
-}
-
-# internal mappings
-
-type FluidNftIdToUnderlyingPositionAccount {
-  id: ID! # `fluidNFT_${chainId}_${nftId}`
-  positionId: String!
-  account: String!
-}
-
-# marketId in the case of aave, and aave forks, is just the PoolProxy address.
-# for morpho, it's the marketId
-type ReserveDataUpdated {
-  id: ID! # `${chainId}_${tokenAddress}_${marketId}`
-  moneyMarket: String! # AaveV3 | ZeroLend | Unknown
-  timestamp: Int!
-  blockNumber: Int!
-  chainId: Int!
-  token: Token!
-  lendingIndex: BigInt!
-  borrowingIndex: BigInt!
 }

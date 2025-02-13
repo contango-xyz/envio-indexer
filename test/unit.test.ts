@@ -6,7 +6,7 @@ import { FillItemType } from '../src/utils/types'
 import { getTransactionHashes, processTransaction } from './testHelpers'
 import { getBalancesAtBlock } from '../src/utils/common'
 import { mulDiv } from '../src/utils/math-helpers'
-import { AccountingType } from '../src/accounting/lots'
+import { AccountingType } from '../src/accounting/lotsAccounting'
 
 const { MockDb } = TestHelpers
 
@@ -53,8 +53,6 @@ describe('indexer tests', () => {
       expect(totalDebtCostOnFillItems, `totalDebtCostOnFillItems trade ${i + 1}`).to.equal(position?.accruedInterest)
 
       if (i === 0) {
-        console.log(`Position state after trade number ${i + 1}`, position)
-        console.log('fillItem', fillItems[i])
 
         expect(fillItems[i].collateralDelta, 'fillItems[i].collateralDelta').to.equal(19655463075342034n)
         expect(fillItems[i].debtDelta, 'fillItems[i].debtDelta').to.equal(9999999999999999n)
@@ -155,13 +153,9 @@ describe('indexer tests', () => {
         expect(shortLots[1].nextLotId).to.be.undefined
         expect(shortLots[1].closedAtBlock).to.be.undefined
 
-        console.log('shortLots after trade 2', shortLots)
-
         console.log('------------- TWO FINISHED -------------------')
         
       } else if (i === 2) {
-        console.log(`Position state after trade number ${i + 1}`, position)
-        console.log('fillItem', fillItems[i])
 
         const lotZeroEntryPriceBefore = calculateEntryPrice(longLotsBefore[0])
 
@@ -213,30 +207,17 @@ describe('indexer tests', () => {
         expect(costDeltaShort, 'costDeltaShort').to.equal(-18502300174674009n)
         expect(fillItems[i].collateralDelta, 'fillItems[i].collateralDelta').to.equal(-12963310727632896n)
 
-        // pnl long:  46130387217010
-        // pnl short:
-        // collateral delta: -12963310727632896
-        // collateral delta in quote ccy: -12963310727632896 * 1.033029241515446081 = -13187613148871857
-        // realised pnl short: -13187613148871857 - (-13386791261471010 + 0) = 199178112599153 (0.0001991781126)
+        // cashflowBase:
+        // 9810977519803654 - 9827731537671017 = -16754017867363 (-0.00001675401787)
 
-        // alternative calculation:
-        // 
-
-        // -9375574049290972n
-        // -9369487592649461
-
-        expect(position?.realisedPnl_short, 'position?.realisedPnl_short').to.equal(-199178112599153n)
-        expect(fillItems[i].realisedPnl_short, 'fillItems[i].realisedPnl_short').to.equal(-5538989447041113n)
+        expect(position?.realisedPnl_short, 'position?.realisedPnl_short').to.equal(-16754017867363n)
+        expect(fillItems[i].realisedPnl_short, 'fillItems[i].realisedPnl_short').to.equal(-16754017867363n)
         expect(fillItems[i].collateralDelta, 'fillItems[i].collateralDelta').to.equal(-12963310727632896n)
         expect(fillItems[i].fillItemType, 'fillItems[i].fillItemType').to.equal(FillItemType.Trade)
         expect(fillItems[i].cashflowSwap_id).to.be.undefined
 
         expect(position?.collateral).to.equal(19753141049332163n)
         expect(position?.debt).to.equal(9903142301618520n) // 9999999999999999 + 13289933563089531 + -13386791261471010 = 9903142301618520
-        // expect(position?.accruedInterest).to.equal(0n)
-        // expect(position?.accruedLendingProfit).to.equal(0n)
-        // expect(position?.realisedPnl_long).to.equal(46130387217010n)
-        // expect(position?.realisedPnl_short).to.equal(-346105178850924n)
 
         console.log('------------- THREE FINISHED -------------------')
         
@@ -244,13 +225,12 @@ describe('indexer tests', () => {
         const fillItem = fillItems[i]
 
         console.log(`Position state after trade number ${i + 1}`, position)
-        console.log('fillItem', fillItems[i])
 
         const totalCollateral = 19753141049332163n
         const totalDebt = 9903142301618520n
         const totalCashflowQuote = 0n
         
-        
+        expect(fillItem.realisedPnl_long, 'fillItem.realisedPnl_long').to.equal(148683342931661n) // 0.000148683342931661
       }
 
       longLotsBefore = longLots

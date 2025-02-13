@@ -38,6 +38,20 @@ export class Cache {
   }
 }
 
+const replacer = (_key: string, value: any) => {
+  if (typeof value === 'bigint') {
+    return value.toString() + 'n'
+  }
+  return value
+}
+
+const reviver = (_key: string, value: any) => {
+  if (typeof value === 'string' && /^-?\d+n$/.test(value)) {
+    return BigInt(value.slice(0, -1))
+  }
+  return value
+}
+
 export class Entry<T extends Shape> {
   private memory: T = {} as T;
 
@@ -63,12 +77,7 @@ export class Entry<T extends Shape> {
   public load() {
     try {
       const data = fs.readFileSync(this.file, Entry.encoding);
-      this.memory = JSON.parse(data, (_, value) => {
-        if (typeof value === 'string' && /^\d+n$/.test(value)) {
-          return BigInt(value.slice(0, -1));
-        }
-        return value;
-      }) as T;
+      this.memory = JSON.parse(data, reviver) as T;
     } catch (error) {
       console.error(error);
       this.memory = {} as T;
@@ -99,9 +108,7 @@ export class Entry<T extends Shape> {
   }
 
   private publish() {
-    const prepared = JSON.stringify(this.memory, (_, value) => 
-      typeof value === 'bigint' ? value.toString() + 'n' : value
-    );
+    const prepared = JSON.stringify(this.memory, replacer);
     try {
       fs.writeFileSync(this.file, prepared);
     } catch (error) {

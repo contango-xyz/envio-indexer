@@ -10,7 +10,6 @@ IMoneyMarket.Borrowed.handler(async ({ event, context }) => {
   const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.DEBT })
   const entity: ContangoDebtEvent = {
     id: eventId,
-    eventType: EventType.DEBT,
     positionId: event.params.positionId,
     debtDelta: event.params.amount,
     asset_id: asset.id,
@@ -22,7 +21,7 @@ IMoneyMarket.Borrowed.handler(async ({ event, context }) => {
   }
 
   context.ContangoDebtEvent.set(entity)
-  eventStore.addLog({ eventId, contangoEvent: entity })
+  eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.DEBT } })
 
 }, { wildcard: true })
 
@@ -31,7 +30,6 @@ IMoneyMarket.Repaid.handler(async ({ event, context }) => {
   const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.DEBT })
   const entity: ContangoDebtEvent = {
     id: eventId,
-    eventType: EventType.DEBT,
     positionId: event.params.positionId,
     debtDelta: -event.params.amount,
     asset_id: asset.id,
@@ -43,7 +41,7 @@ IMoneyMarket.Repaid.handler(async ({ event, context }) => {
   }
 
   context.ContangoDebtEvent.set(entity)
-  eventStore.addLog({ eventId, contangoEvent: entity })
+  eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.DEBT } })
 
 }, { wildcard: true })
 
@@ -54,7 +52,6 @@ IMoneyMarket.Lent.handler(async ({ event, context }) => {
   const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.COLLATERAL })
   const entity: ContangoCollateralEvent = {
     id: eventId,
-    eventType: EventType.COLLATERAL,
     positionId: event.params.positionId,
     collateralDelta: event.params.amount,
     asset_id: asset.id,
@@ -66,7 +63,7 @@ IMoneyMarket.Lent.handler(async ({ event, context }) => {
   }
 
   context.ContangoCollateralEvent.set(entity)
-  eventStore.addLog({ eventId, contangoEvent: entity })
+  eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.COLLATERAL } })
 
 }, { wildcard: true })
 
@@ -75,7 +72,6 @@ IMoneyMarket.Withdrawn.handler(async ({ event, context }) => {
   const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.COLLATERAL })
   const entity: ContangoCollateralEvent = {
     id: eventId,
-    eventType: EventType.COLLATERAL,
     positionId: event.params.positionId,
     collateralDelta: -event.params.amount,
     asset_id: asset.id,
@@ -87,6 +83,6 @@ IMoneyMarket.Withdrawn.handler(async ({ event, context }) => {
   }
 
   context.ContangoCollateralEvent.set(entity)
-  eventStore.addLog({ eventId, contangoEvent: entity })
+  eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.COLLATERAL } })
 
 }, { wildcard: true })

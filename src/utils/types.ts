@@ -1,4 +1,4 @@
-import { ContangoSwapEvent, ContangoLiquidationEvent, ContangoPositionMigratedEvent, ContangoFeeCollectedEvent, ContangoDebtEvent, ContangoCollateralEvent, ContangoPositionUpsertedEvent, ERC20_Transfer_event } from "generated";
+import { ContangoCollateralEvent, ContangoDebtEvent, ContangoFeeCollectedEvent, ContangoLiquidationEvent, ContangoPositionMigratedEvent, ContangoPositionUpsertedEvent, ContangoSwapEvent, ERC20_Transfer_event } from "generated";
 
 export enum FillType {
   Open = "Open",
@@ -18,23 +18,28 @@ export enum SwapType {
 }
 
 export enum EventType {
-  POSITION_UPSERTED = "POSITION_UPSERTED",
   SWAP_EXECUTED = "SWAP_EXECUTED",
   FEE_COLLECTED = "FEE_COLLECTED",
-  MIGRATED = "MIGRATED",
-  LIQUIDATION = "LIQUIDATION",
   DEBT = "DEBT",
   COLLATERAL = "COLLATERAL",
-  UNKNOWN = "UNKNOWN"
+  POSITION_UPSERTED = "POSITION_UPSERTED",
+  TRANSFER = "TRANSFER",
+  MIGRATED = "MIGRATED",
+  LIQUIDATION = "LIQUIDATION",
 }
 
-export type ContangoEvents = ContangoSwapEvent |
-  ContangoLiquidationEvent |
-  ContangoPositionMigratedEvent |
-  ContangoFeeCollectedEvent |
-  ContangoDebtEvent |
-  ContangoCollateralEvent |
-  ContangoPositionUpsertedEvent;
+export type TransferEvent = Exclude<ERC20_Transfer_event, "eventType"> & { eventType: EventType.TRANSFER };
+export type MigratedEvent = Exclude<ContangoPositionMigratedEvent, "eventType"> & { eventType: EventType.MIGRATED };
+
+export type ContangoEvents = 
+  | Exclude<ContangoSwapEvent, "eventType"> & { eventType: EventType.SWAP_EXECUTED }
+  | MigratedEvent
+  | Exclude<ContangoFeeCollectedEvent, "eventType"> & { eventType: EventType.FEE_COLLECTED }
+  | Exclude<ContangoDebtEvent, "eventType"> & { eventType: EventType.DEBT }
+  | Exclude<ContangoCollateralEvent, "eventType"> & { eventType: EventType.COLLATERAL }
+  | Exclude<ContangoPositionUpsertedEvent, "eventType"> & { eventType: EventType.POSITION_UPSERTED }
+  | Exclude<ContangoLiquidationEvent, "eventType"> & { eventType: EventType.LIQUIDATION }
+  | TransferEvent;
 
 export enum MoneyMarket {
   Aave = 1,
@@ -86,3 +91,7 @@ export enum FillItemType {
   Trade = "Trade",
   Liquidation = "Liquidation",
 }
+
+export type Mutable<T> = {
+  -readonly [P in keyof T]: T[P];
+};

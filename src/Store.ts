@@ -1,10 +1,11 @@
-import { ERC20_Transfer_event, Position } from "generated"
+import { ERC20_Transfer_event, Lot, Position } from "generated"
 import { decodeStoreKey, eventIdToStoreKey } from "./utils/ids"
 import { StoreKey, createStoreKey } from "./utils/ids"
 import { EventId } from "./utils/ids"
 import { ContangoEvents } from "./utils/types"
 import { recordKeys } from "./utils/record-utils"
 import { Chain } from "viem"
+import { Lot_t, Position_t } from "generated/src/db/Entities.gen"
 
 type Store = Record<StoreKey, ContangoEvents[]>
 
@@ -12,7 +13,7 @@ type Store = Record<StoreKey, ContangoEvents[]>
 type CurrentPositionKey = `${number}-${number}-${string}`
 
 class EventStore {
-  private currentPosition: Record<CurrentPositionKey, Position> = {}
+  private currentPosition: Record<CurrentPositionKey, { position: Position_t, lots: { longLots: Lot_t[], shortLots: Lot_t[] } }> = {}
   private store: Store = {}
   private static instance: EventStore
 
@@ -30,15 +31,15 @@ class EventStore {
   }
 
   // call this whenever processing an event that has the position id as a parameter
-  setCurrentPosition({ position, blockNumber, transactionHash }: { position: Position; blockNumber: number; transactionHash: string }) {
-    this.currentPosition[this.createCurrentPositionId({ chainId: position.chainId, blockNumber, transactionHash })] = position
+  setCurrentPosition({ position, lots, blockNumber, transactionHash }: { lots: { longLots: Lot[], shortLots: Lot[] }; position: Position; blockNumber: number; transactionHash: string }) {
+    this.currentPosition[this.createCurrentPositionId({ chainId: position.chainId, blockNumber, transactionHash })] = { position, lots }
   }
 
   // we use this to get the current position that's being processed when we're processing an event that doesn't have the position id as a parameter
   getCurrentPosition({ chainId, blockNumber, transactionHash }: { chainId: Chain['id'], blockNumber: number; transactionHash: string }) {
-    const position = this.currentPosition[this.createCurrentPositionId({ chainId, blockNumber, transactionHash })]
-    if (!position) return null
-    return { ...position }
+    const result = this.currentPosition[this.createCurrentPositionId({ chainId, blockNumber, transactionHash })]
+    if (!result) return null
+    return result
   }
 
   addLog({ eventId, contangoEvent }: {
@@ -103,42 +104,3 @@ class EventStore {
 
 export const eventStore = EventStore.getInstance()
 
-type Erc20Store = Record<Chain['id'], { transactionHash: string, events: ERC20_Transfer_event[] }>
-
-class Erc20EventStore {
-  private store: Erc20Store = {}
-  private static instance: Erc20EventStore
-
-  private constructor() {}
-
-  static getInstance(): Erc20EventStore {
-    if (!Erc20EventStore.instance) {
-      Erc20EventStore.instance = new Erc20EventStore()
-    }
-    return Erc20EventStore.instance
-  }
-
-  addLog({ chainId, transactionHash, erc20Event }: {
-    chainId: number
-    transactionHash: string
-    erc20Event: ERC20_Transfer_event
-  }): void {
-
-    // cleans up memory if the transaction hash has changed
-    if (this.store[chainId]?.transactionHash !== transactionHash) {
-      this.store[chainId] = { transactionHash, events: [] }
-    }
-
-    this.store[chainId].events.push(erc20Event)
-  }
-
-  processEvents(chainId: number) {
-    // no need to do cleanup here as it's already handled by the addLog method
-    const res = this.store[chainId]?.events || []
-    delete this.store[chainId]
-    return res
-  }
-
-}
-
-export const erc20EventStore = Erc20EventStore.getInstance()

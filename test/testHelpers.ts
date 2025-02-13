@@ -59,7 +59,7 @@ const getEventSelectors = (contract: keyof typeof abiItems) => {
   return Object.values(abiItems[contract]).map(toEventSelector)
 }
 
-const logToEvent = (log: Log, from: Hex, chainId: number) => {
+const logToEvent = ({ log, from, to, chainId }: { log: Log; from: Hex; to: Hex; chainId: number }) => {
   const data = log.data === "0x" ? undefined : log.data as Hex
       const topics = log.topics as [Hex, ...Hex[]]
       try {
@@ -94,6 +94,7 @@ const logToEvent = (log: Log, from: Hex, chainId: number) => {
           transaction: {
             hash: log.transactionHash as Hex,
             from,
+            to,
           },
           logIndex: Number(log.logIndex),
           block: {
@@ -131,7 +132,7 @@ const reviver = (_key: string, value: any) => {
   return value
 }
 
-const getTransactionLogs = async (chainId: number, transactionHash: string): Promise<{ logs: Log[], from: Hex }> => {
+const getTransactionLogs = async (chainId: number, transactionHash: string): Promise<{ logs: Log[]; from: Hex; to: Hex }> => {
   const cacheKey = getCacheKey(chainId, transactionHash)
   
   try {
@@ -139,23 +140,25 @@ const getTransactionLogs = async (chainId: number, transactionHash: string): Pro
     return JSON.parse(cached, reviver)
   } catch (e) {
     // Cache miss, fetch from chain
-    const { logs, from } = await clients[chainId].getTransactionReceipt({ hash: transactionHash as Hex })
+    const { logs, from, to } = await clients[chainId].getTransactionReceipt({ hash: transactionHash as Hex })
+
+    if (!to) throw new Error(`Transaction ${transactionHash} "to" property not found`)
     
     // Ensure cache directory exists
     await fs.mkdir(getCacheDir(), { recursive: true })
     
     // Save to cache
-    await fs.writeFile(cacheKey, JSON.stringify({ logs, from }, replacer, 2))
+    await fs.writeFile(cacheKey, JSON.stringify({ logs, from, to }, replacer, 2))
     
-    return { logs, from }
+    return { logs, from, to }
   }
 }
 
 export const processTransaction = async (chainId: number, transactionHash: string, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
-  const { logs, from } = await getTransactionLogs(chainId, transactionHash)
+  const { logs, from, to } = await getTransactionLogs(chainId, transactionHash)
 
   for (const log of logs) {
-    const event = logToEvent(log, from, chainId)
+    const event = logToEvent({ log, from, to, chainId })
     if (!event) continue
 
     switch (event.eventName) {
