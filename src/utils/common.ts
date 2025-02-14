@@ -99,8 +99,8 @@ export const getPairForPositionId = async (
 
   try {
     const [collateralToken, debtToken] = await Promise.all([
-      context.Token.get(instrument.collateralToken_id),
-      context.Token.get(instrument.debtToken_id),
+      getOrCreateToken({ ...decodeTokenId(instrument.collateralToken_id), context }),
+      getOrCreateToken({ ...decodeTokenId(instrument.debtToken_id), context }),
     ])
   
     if (!collateralToken) throw new Error(`Token not found for ${instrument.collateralToken_id} positionId: ${positionId}`)
@@ -120,6 +120,19 @@ export const getPosition = async ({ chainId, positionId, context }: { chainId: n
   return { ...position }
 }
 
+// Add a new type for position snapshots
+type PositionSnapshot = {
+  position: Position;
+  lots: {
+    longLots: Lot[];
+    shortLots: Lot[];
+  };
+  blockNumber: number;
+}
+
+// Add a simple in-memory cache for position snapshots
+const positionSnapshotCache = new Map<string, PositionSnapshot>()
+
 // always get the snapshot of the position, as it was BEFORE the transaction was processed
 export const getPositionSnapshot = async (
   { chainId, positionId, blockNumber, transactionHash, context }: { blockNumber: number; transactionHash: string; chainId: number; positionId: string; context: handlerContext }
@@ -127,8 +140,36 @@ export const getPositionSnapshot = async (
   const snapshotFromStore = eventStore.getCurrentPosition({ chainId, blockNumber, transactionHash })
   if (snapshotFromStore) return snapshotFromStore
 
+  const cacheKey = `${chainId}-${positionId}`
+  const cachedSnapshot = positionSnapshotCache.get(cacheKey)
+  
+  // Use cached snapshot if it's from the same block
+  if (cachedSnapshot && cachedSnapshot.blockNumber === blockNumber) {
+    return {
+      position: { ...cachedSnapshot.position },
+      lots: {
+        longLots: [...cachedSnapshot.lots.longLots],
+        shortLots: [...cachedSnapshot.lots.shortLots]
+      }
+    }
+  }
+
   const position = await getPosition({ chainId, positionId, context })
   const lots = await loadLots({ position, context })
+
+  // Cache the new snapshot
+  positionSnapshotCache.set(cacheKey, {
+    position,
+    lots,
+    blockNumber
+  })
+
+  // Clean old entries from cache (from previous blocks)
+  for (const [key, snapshot] of positionSnapshotCache.entries()) {
+    if (snapshot.blockNumber < blockNumber) {
+      positionSnapshotCache.delete(key)
+    }
+  }
 
   eventStore.setCurrentPosition({ position, lots, blockNumber, transactionHash })
 
@@ -143,11 +184,22 @@ export const getPositionSafe = async ({ chainId, positionId, context }: { chainI
   }
 }
 
-export const setPosition = (
+export const setPosition = async (
   position: Position,
   lots: { longLots: Lot[]; shortLots: Lot[] },
   { blockNumber, transactionHash, context }: { blockNumber: number; transactionHash: string; context: handlerContext; }
 ) => {
-  context.Position.set(position)
-  saveLots({ lots: [...lots.longLots, ...lots.shortLots], context })
+  // Update cache
+  const cacheKey = `${position.chainId}-${position.positionId}`
+  positionSnapshotCache.set(cacheKey, {
+    position,
+    lots,
+    blockNumber
+  })
+
+  // Batch save position and lots
+  await Promise.all([
+    context.Position.set(position),
+    saveLots({ lots: [...lots.longLots, ...lots.shortLots], context })
+  ])
 }

@@ -162,40 +162,30 @@ export const handleCostDelta = ({ lots, fillItem, costDelta, accountingType }: {
 
 
 export const loadLots = async ({ position, context }: { position: Position; context: handlerContext }) => {
-
-  let nextLongLotId = position.firstLotId_long
-  let longLots: Lot[] = []
-
-  while (true) {
-    const lotMaybe = await context.Lot.get(nextLongLotId)
-    if (lotMaybe) {
-      longLots.push(lotMaybe)
-      if (!lotMaybe.nextLotId) break
-      nextLongLotId = lotMaybe.nextLotId
-    } else {
-      break
+  const loadChain = async (firstId: string | undefined) => {
+    const promises: Promise<Lot | undefined>[] = []
+    let currentId = firstId
+    while (currentId && currentId.length > 0) {
+      promises.push(context.Lot.get(currentId))
+      const lot = await context.Lot.get(currentId)
+      if (!lot) break
+      currentId = lot.nextLotId
     }
+    return Promise.all(promises)
   }
 
-  let nextShortLotId = position.firstLotId_short
-  let shortLots: Lot[] = []
+  const [longLotsPromises, shortLotsPromises] = await Promise.all([
+    loadChain(position.firstLotId_long),
+    loadChain(position.firstLotId_short)
+  ])
 
-  while (true) {
-    const lotMaybe = await context.Lot.get(nextShortLotId)
-    if (lotMaybe) {
-      shortLots.push(lotMaybe)
-      if (!lotMaybe.nextLotId) break
-      nextShortLotId = lotMaybe.nextLotId
-    } else {
-      break
-    }
-  }
+  const longLots = longLotsPromises.filter((lot): lot is Lot => lot !== undefined)
+  const shortLots = shortLotsPromises.filter((lot): lot is Lot => lot !== undefined)
 
   return { longLots, shortLots }
 }
 
-export const saveLots = ({ lots, context }: { lots: ReturnPromiseType<typeof loadLots>['longLots'] | ReturnPromiseType<typeof loadLots>['shortLots']; context: handlerContext }) => {
-  lots.forEach(lot => {
-    context.Lot.set(lot)
-  })
+export const saveLots = async ({ lots, context }: { lots: ReturnPromiseType<typeof loadLots>['longLots'] | ReturnPromiseType<typeof loadLots>['shortLots']; context: handlerContext }) => {
+  // Save all lots in parallel
+  await Promise.all(lots.map(lot => context.Lot.set(lot)))
 }
