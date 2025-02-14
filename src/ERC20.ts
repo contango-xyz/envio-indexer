@@ -69,6 +69,9 @@ WETH.Withdrawal.handler(async ({ event, context }) => {
       context
     )
   }
+  
+  // Cleanup events after processing
+  eventStore.cleanup(event.chainId, event.block.number + 1)
 },
 {
   wildcard: true,

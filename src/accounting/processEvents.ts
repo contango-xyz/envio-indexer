@@ -370,5 +370,7 @@ export const eventsReducer = async (maybeLastEventInTx: GenericEvent & { positio
 
   context.FillItem.set(newFillItem)
   setPosition(newPosition, { longLots, shortLots }, { blockNumber: maybeLastEventInTx.blockNumber, transactionHash: maybeLastEventInTx.transactionHash, context })
-  eventStore.cleanup(chainId, blockNumber)
+  
+  // Run cleanup with the next block number to ensure proper event removal
+  eventStore.cleanup(chainId, blockNumber + 1)
 }
