@@ -92,6 +92,7 @@ PositionNFT.Transfer.handler(async ({ event, context }) => {
       realisedPnl_long: 0n,
       realisedPnl_short: 0n,
     }
+
     setPosition(position, { longLots: [], shortLots: [] }, { blockNumber: event.block.number, transactionHash: event.transaction.hash, context })
   }
 });

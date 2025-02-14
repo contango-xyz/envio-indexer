@@ -48,7 +48,7 @@ export const getBalancesAtBlock = async (chainId: number, positionId: Hex, block
   return balancesFromChain
 }
 
-const getInstrument = async (chainId: number, positionId: string) => {
+const getInstrument = async (chainId: number, positionId: string, context: handlerContext) => {
   const instrumentId = positionId.slice(0, 34) as Hex
   const cached = Cache.init({ category: CacheCategory.Instrument, chainId })
   const instrument = cached.read(instrumentId)
@@ -61,17 +61,21 @@ const getInstrument = async (chainId: number, positionId: string) => {
   })
 
   const chainInstrument = await contangoProxy.read.instrument([instrumentId])
+  const [base, quote] = await Promise.all([
+    getOrCreateToken({ address: chainInstrument.base, chainId, context }),
+    getOrCreateToken({ address: chainInstrument.quote, chainId, context }),
+  ])
 
   const entity: Instrument = {
     id: createInstrumentId({ chainId, instrumentId }),
     chainId,
     instrumentId,
-    collateralToken_id: chainInstrument.base,
-    debtToken_id: chainInstrument.quote,
+    collateralToken_id: base.id,
+    debtToken_id: quote.id,
     closingOnly: chainInstrument.closingOnly,
   }
 
-  cached.add({ [`${instrumentId}-${chainId}`]: entity })
+  cached.add({ [instrumentId]: entity })
 
   return entity
 }
@@ -82,7 +86,7 @@ export const getOrCreateInstrument = async ({ chainId, positionId, context }: { 
   const storedInstrument = await context.Instrument.get(createInstrumentId({ chainId, instrumentId }))
   if (storedInstrument) return storedInstrument
 
-  const instrument = await getInstrument(chainId, instrumentId)
+  const instrument = await getInstrument(chainId, instrumentId, context)
   context.Instrument.set(instrument)
 
   return instrument
@@ -95,8 +99,8 @@ export const getPairForPositionId = async (
 
   try {
     const [collateralToken, debtToken] = await Promise.all([
-      getOrCreateToken({ address: instrument.collateralToken_id, chainId, context }),
-      getOrCreateToken({ address: instrument.debtToken_id, chainId, context }),
+      context.Token.get(instrument.collateralToken_id),
+      context.Token.get(instrument.debtToken_id),
     ])
   
     if (!collateralToken) throw new Error(`Token not found for ${instrument.collateralToken_id} positionId: ${positionId}`)

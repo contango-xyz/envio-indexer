@@ -30,62 +30,22 @@ export enum EventType {
 
 export type TransferEvent = Exclude<ERC20_Transfer_event, "eventType"> & { eventType: EventType.TRANSFER };
 export type MigratedEvent = Exclude<ContangoPositionMigratedEvent, "eventType"> & { eventType: EventType.MIGRATED };
+export type SwapEvent = Exclude<ContangoSwapEvent, "eventType"> & { eventType: EventType.SWAP_EXECUTED };
+export type FeeCollectedEvent = Exclude<ContangoFeeCollectedEvent, "eventType"> & { eventType: EventType.FEE_COLLECTED };
+export type DebtEvent = Exclude<ContangoDebtEvent, "eventType"> & { eventType: EventType.DEBT };
+export type CollateralEvent = Exclude<ContangoCollateralEvent, "eventType"> & { eventType: EventType.COLLATERAL };
+export type PositionUpsertedEvent = Exclude<ContangoPositionUpsertedEvent, "eventType"> & { eventType: EventType.POSITION_UPSERTED };
+export type LiquidationEvent = Exclude<ContangoLiquidationEvent, "eventType"> & { eventType: EventType.LIQUIDATION };
 
 export type ContangoEvents = 
-  | Exclude<ContangoSwapEvent, "eventType"> & { eventType: EventType.SWAP_EXECUTED }
+  | SwapEvent
   | MigratedEvent
-  | Exclude<ContangoFeeCollectedEvent, "eventType"> & { eventType: EventType.FEE_COLLECTED }
-  | Exclude<ContangoDebtEvent, "eventType"> & { eventType: EventType.DEBT }
-  | Exclude<ContangoCollateralEvent, "eventType"> & { eventType: EventType.COLLATERAL }
-  | Exclude<ContangoPositionUpsertedEvent, "eventType"> & { eventType: EventType.POSITION_UPSERTED }
-  | Exclude<ContangoLiquidationEvent, "eventType"> & { eventType: EventType.LIQUIDATION }
+  | FeeCollectedEvent
+  | DebtEvent
+  | CollateralEvent
+  | PositionUpsertedEvent
+  | LiquidationEvent
   | TransferEvent;
-
-export enum MoneyMarket {
-  Aave = 1,
-  Compound = 2,
-  Yield = 3,
-  Exactly = 4,
-  Sonne = 5,
-  Maker = 6,
-  Spark = 7,
-  MorphoBlue = 8,
-  Agave = 9,
-  AaveV2 = 10,
-  Radiant = 11,
-  Lodestar = 12,
-  Moonwell = 13,
-  Comet = 14,
-  Granary = 15,
-  Silo = 16,
-  Dolomite = 17,
-  ZeroLend = 18,
-  AaveLido = 19,
-  LayerBank = 20,
-  RhoMarkets = 21,
-  InitCapital = 22,
-  Mendi = 23,
-  Benqi = 24,
-  Lendle = 25,
-  Methlab = 26,
-  Minterest = 27,
-  Silo2 = 28,
-  AaveEtherFi = 29,
-  Euler = 30,
-  Fluid = 31,
-  ZeroLendBTC = 32,
-  SparkSky = 33,
-  ZeroLendRWA = 34,
-  SiloBTC = 35,
-}
-
-export type GenericEvent = {
-  chainId: number
-  blockNumber: number
-  transactionHash: string
-  blockTimestamp: number
-  logIndex: number
-}
 
 export enum FillItemType {
   Trade = "Trade",

@@ -14,7 +14,8 @@ MorphoLiquidations.LiquidateMorpho.handler(async ({ event, context }) => {
   if (positionId) {
     const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
     const position = await getPosition({ chainId: event.chainId, positionId, context })
-    const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, context })
+    const { debtToken } = await getPairForPositionId({ chainId: event.chainId, positionId, context })
+    const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
 
     const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
     const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)

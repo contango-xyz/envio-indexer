@@ -124,8 +124,6 @@ export async function getOrCreateToken(
   }
 
   const token = await getTokenDetails(address, chainId)
-
-  // save to db
   context.Token.set(token)
 
   return token;

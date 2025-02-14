@@ -1,14 +1,18 @@
 import { expect } from 'chai'
-import { Lot, TestHelpers } from 'generated'
+import { Lot, Position, TestHelpers } from 'generated'
 import { describe, it } from 'mocha'
-import { createIdForPosition } from '../src/utils/ids'
-import { FillItemType } from '../src/utils/types'
-import { getTransactionHashes, processTransaction } from './testHelpers'
-import { getBalancesAtBlock } from '../src/utils/common'
-import { mulDiv } from '../src/utils/math-helpers'
+import { hexToBigInt } from 'viem'
+import { partialFillItemWithCashflowEventsToFillItem, updateFillItemWithCashflowEvents } from '../src/accounting/helpers'
 import { AccountingType } from '../src/accounting/lotsAccounting'
-
-const { MockDb } = TestHelpers
+import { eventsToFillItem, processEvents } from '../src/accounting/processEvents'
+import { eventStore } from '../src/Store'
+import { getBalancesAtBlock } from '../src/utils/common'
+import { createEventId, createIdForPosition } from '../src/utils/ids'
+import { mulDiv } from '../src/utils/math-helpers'
+import { ContangoEvents, FillItemType } from '../src/utils/types'
+import { collateralToken, createCollateralEvent, createDebtEvent, createFeeCollectedEvent, createSwapEvent, createTransferEvent, debtToken, emptyPartialFillItem, maestroProxy, TRADER, WETH_ADDRESS, wrsETH_ADDRESS } from './createEvents'
+import { getTransactionHashes, processTransaction } from './testHelpers'
+const { MockDb, Maestro, PositionNFT, UnderlyingPositionFactory, ContangoProxy } = TestHelpers
 
 const calculateEntryPrice = (lot: Lot) => {
   return Number(lot.grossOpenCost) / Number(lot.grossSize)
@@ -16,9 +20,196 @@ const calculateEntryPrice = (lot: Lot) => {
 
 describe('indexer tests', () => {
   let mockDb: ReturnType<typeof MockDb.createMockDb>
+  const blockNumber = 18958249300517
+  const proxyAddress = '0x0000000000000000000000000000000000000003'
+  const positionId = '0x7772734554485745544800000000000012ffffffff0000000000000000000001'
+  let position: Position
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mockDb = MockDb.createMockDb()
+
+
+    mockDb = await PositionNFT.Transfer.processEvent({
+      event: {
+        params: {
+          tokenId: hexToBigInt(positionId),
+          from: '0x0000000000000000000000000000000000000000',
+          to: TRADER,
+        },
+        chainId: 1,
+        srcAddress: '0x0000000000000000000000000000000000000000',
+        logIndex: 0,
+        transaction: {
+          hash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002',
+          from: TRADER,
+          to: maestroProxy,
+        },
+        block: {
+          number: blockNumber,
+          timestamp: 18958249300517,
+          hash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002',
+        }
+      },
+      mockDb,
+    })
+
+    const createUnderlyingMockEvent = UnderlyingPositionFactory.UnderlyingPositionCreated.createMockEvent({
+      account: proxyAddress,
+      positionId,
+    })
+
+    mockDb = await UnderlyingPositionFactory.UnderlyingPositionCreated.processEvent({
+      event: createUnderlyingMockEvent,
+      mockDb,
+    })
+
+    const pos = mockDb.entities.Position.get(createIdForPosition({ chainId: 1, positionId }))
+    if (pos) {
+      position = pos
+    } else {
+      throw new Error('Position not found in test!')
+    }
+  })
+
+  it('fully mocked test - OPEN basic', async () => {
+
+    const events = [
+      createDebtEvent({ debtDelta: BigInt(0.1e18) }),
+      createSwapEvent({ amountIn: BigInt(0.2e18), amountOut: BigInt(0.18e18), tokenIn: WETH_ADDRESS, tokenOut: wrsETH_ADDRESS }),
+      createCollateralEvent({ collateralDelta: BigInt(0.2e18) }),
+    ]
+
+    const transferEvent = createTransferEvent({ amount: BigInt(0.1e18), token: debtToken })
+
+    expect(position?.owner).to.equal(TRADER)
+    expect(position?.isOpen).to.be.true
+    expect(position?.proxyAddress).to.equal(proxyAddress)
+
+    const result = events.reduce((acc, curr) => eventsToFillItem(position, debtToken, collateralToken, curr, acc), emptyPartialFillItem)
+
+    expect(result.debtDelta).to.equal(BigInt(0.1e18))
+    expect(result.collateralDelta).to.equal(BigInt(0.2e18))
+    expect(result.tradePrice_long).to.equal(1111111111111111111n)
+    expect(result.tradePrice_short).to.equal(BigInt(0.9e18))
+    expect(result.debtCostToSettle).to.equal(0n)
+    expect(result.lendingProfitToSettle).to.equal(0n)
+    expect(result.fee).to.equal(0n)
+    expect(result.feeToken_id).to.be.undefined
+    expect(result.liquidationPenalty).to.equal(0n)
+
+    const fillItem = {
+      ...result,
+      cashflowQuote: 0n,
+      cashflowBase: 0n,
+      cashflow: 0n,
+      cashflowToken_id: collateralToken.id,
+    }
+
+    const fillItemWithCashflows = updateFillItemWithCashflowEvents({ event: transferEvent, fillItem, owner: TRADER })
+
+    expect(fillItemWithCashflows.cashflowQuote).to.equal(BigInt(0.1e18))
+    expect(fillItemWithCashflows.cashflowBase).to.equal(0n)
+    // expect(fillItemWithCashflows.cashflow).to.equal(BigInt(0.1e18))
+    expect(fillItemWithCashflows.cashflowToken_id).to.equal(debtToken.id)
+
+    const partialFillItemWithRelativeCashflows = partialFillItemWithCashflowEventsToFillItem(fillItemWithCashflows, position, { ...events[0], logIndex: 0 })
+
+    console.log('fillItemWithCashflows', fillItemWithCashflows)
+    console.log('partialFillItemWithRelativeCashflows', partialFillItemWithRelativeCashflows)
+
+    expect(partialFillItemWithRelativeCashflows.cashflowQuote).to.equal(BigInt(0.1e18))
+    expect(partialFillItemWithRelativeCashflows.cashflowBase).to.equal(BigInt(0.09e18)) // 0.1 * (0.18 / 0.2) = 0.09
+    expect(partialFillItemWithRelativeCashflows.cashflowToken_id).to.equal(debtToken.id)
+    
+    const allEvents: ContangoEvents[] = [...events, transferEvent]
+
+    for (const event of allEvents) {
+      eventStore.addLog({
+        eventId: createEventId({
+          eventType: event.eventType,
+          chainId: event.chainId,
+          blockNumber,
+          transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002',
+          logIndex: 0,
+        }),
+        contangoEvent: event,
+      })
+    }
+
+    const finalResult = await processEvents({
+      genericEvent: { ...events[0], positionId, logIndex: 0 },
+      events: allEvents,
+      position,
+      lots: { longLots: [], shortLots: [] },
+      debtToken,
+      collateralToken,
+    })
+    
+    expect(finalResult.position?.accruedInterest).to.equal(0n)
+    expect(finalResult.position?.accruedLendingProfit).to.equal(0n)
+    expect(finalResult.position?.realisedPnl_long).to.equal(0n)
+    expect(finalResult.position?.realisedPnl_short).to.equal(0n)
+    expect(finalResult.position?.cashflowBase).to.equal(BigInt(0.09e18))
+    expect(finalResult.position?.cashflowQuote).to.equal(BigInt(0.1e18))    
+  })
+
+  it.only('fully mocked test - CLOSE basic', async () => {
+
+    const events = [
+      createDebtEvent({ debtDelta: BigInt(0.1e18) }),
+      createSwapEvent({ amountIn: BigInt(0.2e18), amountOut: BigInt(0.18e18), tokenIn: WETH_ADDRESS, tokenOut: wrsETH_ADDRESS }),
+      createCollateralEvent({ collateralDelta: BigInt(0.2e18) }),
+    ]
+
+    const transferEvent = createTransferEvent({ amount: BigInt(0.1e18), token: debtToken })
+    
+    const allEvents: ContangoEvents[] = [...events, transferEvent]
+
+    for (const event of allEvents) {
+      eventStore.addLog({
+        eventId: createEventId({
+          eventType: event.eventType,
+          chainId: event.chainId,
+          blockNumber,
+          transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002',
+          logIndex: 0,
+        }),
+        contangoEvent: event,
+      })
+    }
+
+    const { position: position1, lots: lots1, fillItem: fillItem1 } = await processEvents({
+      genericEvent: { ...events[0], positionId, logIndex: 0 },
+      events: [
+        createDebtEvent({ debtDelta: BigInt(0.1e18) }),
+        createSwapEvent({ amountIn: BigInt(0.2e18), amountOut: BigInt(0.18e18), tokenIn: WETH_ADDRESS, tokenOut: wrsETH_ADDRESS }),
+        createCollateralEvent({ collateralDelta: BigInt(0.2e18) }),
+        createTransferEvent({ amount: BigInt(0.1e18), token: debtToken }),
+      ],
+      position,
+      lots: { longLots: [], shortLots: [] },
+      debtToken,
+      collateralToken,
+    })
+
+    expect(position1?.collateral).to.equal(BigInt(0.2e18))
+    expect(position1?.debt).to.equal(BigInt(0.1e18))
+
+    const events2 = [
+      createDebtEvent({ debtDelta: -BigInt(0.05e18) }),
+      createSwapEvent({ amountIn: BigInt(0.9e18), amountOut: BigInt(0.95e18), tokenIn: wrsETH_ADDRESS, tokenOut: WETH_ADDRESS }),
+      createCollateralEvent({ collateralDelta: -BigInt(0.1e18) }),
+    ]
+
+    const { position: position2, lots: lots2, fillItem: fillItem2 } = await processEvents({
+      genericEvent: { ...events2[0], positionId, logIndex: 0 },
+      events: events2,
+      position: position1,
+      lots: lots1,
+      debtToken,
+      collateralToken,
+    })
+
   })
 
   it('Linea -> open, increase, decrease, close', async function() {
@@ -51,6 +242,8 @@ describe('indexer tests', () => {
       const totalDebtCostOnFillItems = fillItems.reduce((acc, fillItem) => acc + fillItem.debtCostToSettle, 0n)
       expect(totalLendingProfitOnFillItems, `totalLendingProfitOnFillItems trade ${i + 1}`).to.equal(position?.accruedLendingProfit)
       expect(totalDebtCostOnFillItems, `totalDebtCostOnFillItems trade ${i + 1}`).to.equal(position?.accruedInterest)
+
+      console.log(`Position state after trade number ${i + 1}`, position)
 
       if (i === 0) {
 
@@ -223,8 +416,6 @@ describe('indexer tests', () => {
         
       } else if (i === 3) {
         const fillItem = fillItems[i]
-
-        console.log(`Position state after trade number ${i + 1}`, position)
 
         const totalCollateral = 19753141049332163n
         const totalDebt = 9903142301618520n

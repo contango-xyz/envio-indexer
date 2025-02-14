@@ -11,22 +11,6 @@ export const TRADER = '0x0000000000000000000000000000000000000001'
 ERC20.Transfer.handler(async ({ event, context }) => {
   const eventId = createEventId({ eventType: EventType.TRANSFER, chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex })
   eventStore.addLog({ eventId, contangoEvent: { ...event, eventType: EventType.TRANSFER } })
-
-  // const positionAndLots = eventStore.getCurrentPosition({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash })
-  // if (positionAndLots) {
-  //   await eventsReducer(
-  //     {
-  //       ...event,
-  //       blockNumber: event.block.number,
-  //       transactionHash: event.transaction.hash,
-  //       blockTimestamp: event.block.timestamp,
-  //       positionId: positionAndLots.position.positionId,
-  //       logIndex: event.logIndex,
-  //     },
-  //     context
-  //   )
-  // }
-
 },
 {
   wildcard: true,
@@ -81,7 +65,6 @@ WETH.Withdrawal.handler(async ({ event, context }) => {
         transactionHash: event.transaction.hash,
         blockTimestamp: event.block.timestamp,
         positionId: positionAndLots.position.positionId,
-        logIndex: event.logIndex,
       },
       context
     )

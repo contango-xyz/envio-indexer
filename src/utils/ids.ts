@@ -1,5 +1,5 @@
-import { AccountingType } from "../accounting/lotsAccounting";
-import { EventType, GenericEvent } from "./types";
+import { AccountingType, GenericEvent } from "../accounting/lotsAccounting";
+import { EventType } from "./types";
 
 export const createIdForPosition = ({ chainId, positionId }: Pick<GenericEvent, 'chainId'> & { positionId: string; }): `${number}_${string}` => `${chainId}_${positionId.toLowerCase()}`
 

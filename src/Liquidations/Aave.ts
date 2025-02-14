@@ -13,7 +13,6 @@ import { getBalancesAtBlock, getPairForPositionId, getPosition } from "../utils/
 import { createLiquidationId } from "../utils/ids";
 import { positionIdMapper } from "../utils/mappers";
 import { max, mulDiv } from "../utils/math-helpers";
-import { MoneyMarket } from "../utils/types";
 import { getLiquidationPenalty, getMarkPrice, getPositionIdForProxyAddress } from "./common";
 
 // Aave
@@ -77,7 +76,7 @@ export const processAaveLiquidationEvents = async (
   }
 }
 
-const isV3 = (mm: MoneyMarket) => ![MoneyMarket.AaveV2, MoneyMarket.Agave, MoneyMarket.Radiant, MoneyMarket.Granary].includes(mm)
+const isV3 = (mm: number) => ![10, 9, 11, 15].includes(mm)
 
 type LiquidationEvent = AaveLiquidations_LiquidateAave_event | AaveLiquidations_LiquidateAgave_event | AaveLiquidations_LiquidateRadiant_event
 
@@ -102,9 +101,8 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
       blockTimestamp: Number(event.block.timestamp),
     })
 
-    const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, context })
-
-    console.log('position', position)
+    const { debtToken } = await getPairForPositionId({ chainId: event.chainId, positionId, context })
+    const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
 
     try {
       const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)

@@ -32,7 +32,7 @@ type PartialFillItemWithCashflow = PartialFillItem & {
   cashflowQuote: bigint
   cashflowBase: bigint
   cashflow: bigint
-  cashflowToken_id: string
+  cashflowToken_id?: string
 }
 
 export const updateFillItemWithCashflowEvents = (
@@ -47,17 +47,23 @@ export const updateFillItemWithCashflowEvents = (
   const [owner, from, to, srcAddress] = [_owner, event.params.from, event.params.to, event.srcAddress].map(a => a.toLowerCase())
 
   let { cashflowQuote, cashflowBase, cashflow, cashflowToken_id } = fillItem
+
+  const assignCashflowTokenId = () => {
+    if ([cashflowQuote, cashflowBase, cashflow].every(a => a === 0n)) {
+      cashflowToken_id = createTokenId({ chainId: event.chainId, address: srcAddress })
+    }
+  }
   
   if ([owner, TRADER].includes(from)) {
     // only set if empty (a second transfer event will always be the less meaningful one - for example a dust sweep)
-    cashflowToken_id = cashflowToken_id ?? createTokenId({ chainId: event.chainId, address: srcAddress })
+    assignCashflowTokenId()
 
     if (debtToken.address === srcAddress) cashflowQuote += event.params.value
     else if (collateralToken.address === srcAddress) cashflowBase += event.params.value
     else cashflow += event.params.value
   } else if ([owner, TRADER].includes(to)) {
     // only set if empty (a second transfer event will always be the less meaningful one - for example a dust sweep)
-    cashflowToken_id = cashflowToken_id ?? createTokenId({ chainId: event.chainId, address: srcAddress })
+    assignCashflowTokenId()
 
     if (debtToken.address === srcAddress) cashflowQuote -= event.params.value
     else if (collateralToken.address === srcAddress) cashflowBase -= event.params.value

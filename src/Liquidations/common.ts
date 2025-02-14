@@ -16,9 +16,8 @@ export const getLiquidationPenalty = ({ collateralToken, collateralDelta, debtDe
   return max(mulDiv(markPrice, BigInt(1e4), effectivePrice) - BigInt(1e4), 0n)
 }
 
-export const getMarkPrice = async ({ chainId, positionId, blockNumber, context }: { chainId: number; positionId: Hex; blockNumber: number; context: handlerContext }): Promise<bigint> => {
+export const getMarkPrice = async ({ chainId, positionId, blockNumber, debtToken }: { debtToken: Token; chainId: number; positionId: Hex; blockNumber: number }): Promise<bigint> => {
   try {
-    const { debtToken } = await getPairForPositionId({ chainId, positionId, context })
     const lens = getContract({ abi: lensAbi, address: lensAddress, client: clients[chainId] })
     const prices = await lens.read.prices([positionId], { blockNumber: BigInt(blockNumber) })
     return mulDiv(prices.collateral, debtToken.unit, prices.debt)

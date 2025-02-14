@@ -14,11 +14,11 @@ ExactlyLiquidations.LiquidateExactly.handler(async ({ event, context }) => {
   if (positionId) {
     const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
     const position = await getPosition({ chainId: event.chainId, positionId, context })
-    const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, context })
+    const { debtToken, collateralToken } = await getPairForPositionId({ chainId: event.chainId, positionId, context })
+    const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
 
     const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
     const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
-    const { collateralToken } = await getPairForPositionId({ chainId: event.chainId, positionId, context })
 
     const liquidationEvent: ContangoLiquidationEvent = {
       id: createLiquidationId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex }),

@@ -13,9 +13,10 @@ export type GenericEvent = {
   blockNumber: number
   transactionHash: string
   blockTimestamp: number
+  logIndex: number
 }
 
-export const initialiseLot = ({ event, position, accountingType, size, fillItem }: { fillItem: FillItem; size: bigint; accountingType: AccountingType; event: GenericEvent; position: Position; }) => {
+export const initialiseLot = ({ event, position, accountingType, size, fillItem }: { fillItem: Mutable<Pick<FillItem, 'realisedPnl_short' | 'realisedPnl_long' | 'cashflowBase'>>; size: bigint; accountingType: AccountingType; event: GenericEvent; position: Position; }) => {
   const { chainId, blockNumber, transactionHash, blockTimestamp } = event
   const id = createIdForLot({ chainId, positionId: position.positionId, blockNumber, accountingType })
 
@@ -93,7 +94,7 @@ export const handleSizeDelta = ({
   sizeDelta,
   ...event
 }: GenericEvent & {
-  fillItem: Mutable<FillItem>;
+  fillItem: Mutable<Pick<FillItem, 'realisedPnl_short' | 'realisedPnl_long' | 'cashflowBase'>>;
   position: Position;
   lots: Mutable<Lot>[];
   accountingType: AccountingType;
@@ -141,7 +142,7 @@ export const handleSizeDelta = ({
   } else return lots
 }
 
-export const handleCostDelta = ({ lots, fillItem, costDelta, accountingType }: { fillItem: Mutable<FillItem>; lots: Mutable<Lot>[]; costDelta: bigint; accountingType: AccountingType }) => {
+export const handleCostDelta = ({ lots, fillItem, costDelta, accountingType }: { fillItem: Mutable<Pick<FillItem, 'realisedPnl_short' | 'realisedPnl_long' | 'cashflowBase'>>; lots: Mutable<Lot>[]; costDelta: bigint; accountingType: AccountingType }) => {
   // MUTATES THE LOTS AND POSITION
   if (costDelta > 0n) {
     const unchangedLots = lots.slice(0, lots.length - 1)
