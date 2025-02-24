@@ -1,17 +1,41 @@
-import { ERC20_Transfer_event, FillItem, Position, Token } from "generated";
-import { PartialFillItem } from "./processEvents";
-import { TRADER } from "../ERC20";
-import { vaultProxy } from "../ERC20";
-import { contangoProxy } from "../ERC20";
-import { createTokenId } from "../utils/getTokenDetails";
+import { ContangoSwapEvent, Position, Token } from "generated";
+import { zeroAddress } from "viem";
+import { getIMoneyMarketEventsStartBlock } from "../utils/constants";
+import { createTokenId, decodeTokenId } from "../utils/getTokenDetails";
 import { max, mulDiv } from "../utils/math-helpers";
-import { createFillItemId } from "../utils/ids";
-import { FillItemType } from "../utils/types";
-import { GenericEvent } from "./lotsAccounting";
+import { ContangoEvents, EventType, FillItemType, TransferEvent } from "../utils/types";
+import { deriveFillItemValuesFromPositionUpsertedEvent } from "./legacy";
+import { getMarkPrice } from "../utils/common";
 
-export const createEmptyPartialFillItem = ({ collateralToken, debtToken }: { collateralToken: Token; debtToken: Token; }): PartialFillItem => ({
-  collateralToken,
-  debtToken,
+export type PartialFillItem = {
+  cashflowSwap?: ContangoSwapEvent;
+  cashflow: bigint;
+  cashflowToken_id: string;
+
+  tradePrice_long: bigint; // trade price in debt/collateral terms
+  tradePrice_short: bigint; // trade price in collateral/debt terms
+
+  collateralDelta: bigint;
+  debtDelta: bigint;
+
+  debtCostToSettle: bigint; // debt accrued since last fill event
+  lendingProfitToSettle: bigint; // lending profit accrued since last fill event
+
+  fee: bigint;
+  feeToken_id?: string;
+
+  liquidationPenalty: bigint;
+  fillItemType: FillItemType;
+
+  dust?: {
+    value: bigint;
+    tokenId: string;
+  }
+}
+
+const emptyPartialFillItem = (collateralToken: Token): PartialFillItem => ({
+  cashflow: 0n,
+  cashflowToken_id: collateralToken.id,
   tradePrice_long: 0n,
   tradePrice_short: 0n,
   collateralDelta: 0n,
@@ -21,110 +45,159 @@ export const createEmptyPartialFillItem = ({ collateralToken, debtToken }: { col
   fee: 0n,
   cashflowSwap: undefined,
   liquidationPenalty: 0n,
+  fillItemType: FillItemType.Trade,
 })
 
-export const filterERC20TransferEvents = (event: ERC20_Transfer_event, position: Position) => {
-  const [from, to, owner] = [event.params.from.toLowerCase(), event.params.to.toLowerCase(), position.owner.toLowerCase()]
-  return (to === vaultProxy && from === owner) || (to === contangoProxy && from === vaultProxy)
-}
+const eventsToFillItem = (position: Position, debtToken: Token, collateralToken: Token, event: ContangoEvents, existingFillItem: PartialFillItem): PartialFillItem => {
 
-type PartialFillItemWithCashflow = PartialFillItem & {
-  cashflowQuote: bigint
-  cashflowBase: bigint
-  cashflow: bigint
-  cashflowToken_id?: string
-}
+  switch (event.eventType) {
+    case EventType.DEBT: {
+      if (!existingFillItem.debtCostToSettle) {
+        const debtCostToSettle = max(event.balanceBefore - (position.debt + position.accruedInterest), 0n)
+        return { ...existingFillItem, debtCostToSettle, debtDelta: existingFillItem.debtDelta + event.debtDelta }
+      } else return { ...existingFillItem, debtDelta: existingFillItem.debtDelta + event.debtDelta }
+    }
+    case EventType.COLLATERAL: {
+      if (!existingFillItem.lendingProfitToSettle) {
+        const lendingProfitToSettle = max(event.balanceBefore - (position.accruedLendingProfit + position.collateral), 0n)
+        return { ...existingFillItem, lendingProfitToSettle, collateralDelta: existingFillItem.collateralDelta + event.collateralDelta }
+      } else return { ...existingFillItem, collateralDelta: existingFillItem.collateralDelta + event.collateralDelta }
+    }
+    case EventType.SWAP_EXECUTED: {
+      const [tokenIn, tokenOut] = [event.tokenIn_id, event.tokenOut_id].map(decodeTokenId)
 
-export const updateFillItemWithCashflowEvents = (
-  {
-    event,
-    fillItem,
-    owner: _owner,
-  }: { fillItem: PartialFillItemWithCashflow; owner: string; event: ERC20_Transfer_event }
-): PartialFillItemWithCashflow => {
+      if (tokenIn.address === debtToken.address && tokenOut.address === collateralToken.address) {
+        return {
+          ...existingFillItem,
+          tradePrice_long: mulDiv(event.amountIn, collateralToken.unit, event.amountOut),
+          tradePrice_short: mulDiv(event.amountOut, debtToken.unit, event.amountIn),
+        }
+      }
 
-  const { collateralToken, debtToken } = fillItem
-  const [owner, from, to, srcAddress] = [_owner, event.params.from, event.params.to, event.srcAddress].map(a => a.toLowerCase())
+      if (tokenIn.address === collateralToken.address && tokenOut.address === debtToken.address) {
+        return {
+          ...existingFillItem,
+          tradePrice_long: mulDiv(event.amountOut, collateralToken.unit, event.amountIn),
+          tradePrice_short: mulDiv(event.amountIn, debtToken.unit, event.amountOut),
+        }
+      }
 
-  let { cashflowQuote, cashflowBase, cashflow, cashflowToken_id } = fillItem
+      return { ...existingFillItem, cashflowSwap: event }
+    }
+    case EventType.FEE_COLLECTED: {
+      return {
+        ...existingFillItem,
+        fee: event.amount,
+        feeToken_id: event.token_id,
+      }
+    }
+    case EventType.LIQUIDATION: {
+      return {
+        ...existingFillItem,
+        collateralDelta: event.collateralDelta,
+        debtDelta: event.debtDelta,
+        lendingProfitToSettle: event.lendingProfitToSettle,
+        debtCostToSettle: event.debtCostToSettle,
+        liquidationPenalty: event.liquidationPenalty,
+        fillItemType: FillItemType.Liquidation,
+      }
+    }
+    case EventType.TRANSFER: {
+      const [from, to] = [event.params.from, event.params.to].map(a => a.toLowerCase())
+      const toTrader = [position.owner, zeroAddress].includes(to)
+      const fromTrader = [position.owner, zeroAddress].includes(from)
+      const cashflow = toTrader ? -event.params.value : event.params.value
 
-  const assignCashflowTokenId = () => {
-    if ([cashflowQuote, cashflowBase, cashflow].every(a => a === 0n)) {
-      cashflowToken_id = createTokenId({ chainId: event.chainId, address: srcAddress })
+      console.log('HERE EGILL transfer event: ', event)
+
+      if (toTrader || fromTrader) {
+        // main cashflow event always happens before any dust sweeping events. This means that if the cashflow is already assigned, we know that we're handling a dust sweeping event
+        if (existingFillItem.cashflow !== 0n) return { ...existingFillItem, dust: { value: cashflow, tokenId: createTokenId({ chainId: event.chainId, address: event.srcAddress }) } }  
+        if (toTrader) return { ...existingFillItem, cashflow, cashflowToken_id: createTokenId({ chainId: event.chainId, address: event.srcAddress }) }
+        if (fromTrader) return { ...existingFillItem, cashflow, cashflowToken_id: createTokenId({ chainId: event.chainId, address: event.srcAddress }) }
+      }
+
+      return existingFillItem
+    }
+    case EventType.POSITION_UPSERTED: {
+      if (event.blockNumber <= getIMoneyMarketEventsStartBlock(event.chainId)) {
+        return deriveFillItemValuesFromPositionUpsertedEvent({
+          upsertedEvent: event,
+          fillItem: existingFillItem,
+          position,
+          collateralToken,
+          debtToken
+        })
+      }
+      return existingFillItem
+    }
+    default: {
+      return existingFillItem
     }
   }
-  
-  if ([owner, TRADER].includes(from)) {
-    // only set if empty (a second transfer event will always be the less meaningful one - for example a dust sweep)
-    assignCashflowTokenId()
-
-    if (debtToken.address === srcAddress) cashflowQuote += event.params.value
-    else if (collateralToken.address === srcAddress) cashflowBase += event.params.value
-    else cashflow += event.params.value
-  } else if ([owner, TRADER].includes(to)) {
-    // only set if empty (a second transfer event will always be the less meaningful one - for example a dust sweep)
-    assignCashflowTokenId()
-
-    if (debtToken.address === srcAddress) cashflowQuote -= event.params.value
-    else if (collateralToken.address === srcAddress) cashflowBase -= event.params.value
-    else cashflow -= event.params.value
-  }
-
-  return { ...fillItem, cashflowQuote, cashflowBase, cashflow, cashflowToken_id }
 }
 
-export const partialFillItemWithCashflowEventsToFillItem = (partialFillItem: PartialFillItemWithCashflow, position: Position, event: GenericEvent) => {
+export const eventsToPartialFillItem = (position: Position, debtToken: Token, collateralToken: Token, events: ContangoEvents[]): PartialFillItem => {
+  return events.reduce((acc, event) => eventsToFillItem(position, debtToken, collateralToken, event, acc), emptyPartialFillItem(collateralToken))
+}
 
-  const { collateralToken, debtToken } = partialFillItem
+export const withMarkPrice = async (position: Position, partialFillItem: PartialFillItem, blockNumber: number, debtToken: Token, collateralToken: Token) => {
+  // if the tradePrice is 0, we need to get the markPrice
+  if (partialFillItem.tradePrice_long === 0n || partialFillItem.tradePrice_short === 0n) {
+    const markPrice = await getMarkPrice({ chainId: position.chainId, positionId: position.contangoPositionId, blockNumber, debtToken })
+    partialFillItem.tradePrice_long = markPrice
+    partialFillItem.tradePrice_short = mulDiv(debtToken.unit, collateralToken.unit, markPrice)
+  }
+  return partialFillItem
+}
 
-  let cashflowBase = partialFillItem.cashflowBase
-  let cashflowQuote = partialFillItem.cashflowQuote
+const _baseToQuote = (partialFillItem: PartialFillItem, collateralToken: Token) => (amount: bigint) => mulDiv(amount, partialFillItem.tradePrice_long, collateralToken.unit)
+const _quoteToBase = (partialFillItem: PartialFillItem, collateralToken: Token) => (amount: bigint) => mulDiv(amount, collateralToken.unit, partialFillItem.tradePrice_long)
+
+
+export const calculateCashflowsAndFee = (partialFillItem: PartialFillItem, debtToken: Token, collateralToken: Token, dustCashflow: { value: bigint, tokenId: string } | undefined) => {
+  const { cashflow, cashflowToken_id, fee, feeToken_id } = partialFillItem
+  const baseToQuote = _baseToQuote(partialFillItem, collateralToken)
+  const quoteToBase = _quoteToBase(partialFillItem, collateralToken)
+
+  const fee_long = feeToken_id === debtToken.id ? fee : baseToQuote(fee)
+  const fee_short = feeToken_id === collateralToken.id ? fee : quoteToBase(fee)
+
+  let cashflowQuote = cashflowToken_id === debtToken.id ? cashflow : baseToQuote(cashflow)
+  let cashflowBase = cashflowToken_id === collateralToken.id ? cashflow : quoteToBase(cashflow)
+
+  if (dustCashflow) {
+    if (dustCashflow.tokenId === collateralToken.id) {
+      cashflowBase += dustCashflow.value
+      cashflowQuote += baseToQuote(dustCashflow.value)
+    } else {
+      cashflowQuote += dustCashflow.value
+      cashflowBase += quoteToBase(dustCashflow.value)
+    }
+  }
 
   const { cashflowSwap } = partialFillItem
 
+  // if there's a cashflowSwap, we need to figure out which is the other token (either base or quote) and add/subtract the amount accordingly
   if (cashflowSwap) {
     if (cashflowSwap.tokenOut_id === debtToken.id) {
       cashflowQuote += cashflowSwap.amountOut
+      cashflowBase += baseToQuote(cashflowSwap.amountOut)
     } else if (cashflowSwap.tokenOut_id === collateralToken.id) {
       cashflowBase += cashflowSwap.amountOut
+      cashflowQuote += quoteToBase(cashflowSwap.amountOut)
     } else if (cashflowSwap.tokenIn_id === debtToken.id) {
       cashflowQuote -= cashflowSwap.amountIn
+      cashflowBase -= baseToQuote(cashflowSwap.amountIn)
     } else if (cashflowSwap.tokenIn_id === collateralToken.id) {
       cashflowBase -= cashflowSwap.amountIn
+      cashflowQuote -= quoteToBase(cashflowSwap.amountIn)
     }
   }
 
-  cashflowQuote += mulDiv(cashflowBase, partialFillItem.tradePrice_long, collateralToken.unit)
-  cashflowBase += mulDiv(cashflowQuote, collateralToken.unit, partialFillItem.tradePrice_long)
+  cashflowQuote -= fee_long
+  cashflowBase -= fee_short
 
-  let fee_long = 0n
-  let fee_short = 0n
-
-  if (partialFillItem.feeToken_id === collateralToken.id) {
-    fee_short = partialFillItem.fee
-    fee_long = mulDiv(partialFillItem.fee, partialFillItem.tradePrice_long, collateralToken.unit)
-  } else if (partialFillItem.feeToken_id === debtToken.id) {
-    fee_long = partialFillItem.fee
-    fee_short = mulDiv(partialFillItem.fee, partialFillItem.tradePrice_short, debtToken.unit)
-  }
-
-  return {
-    ...event,
-    ...partialFillItem,
-    id: createFillItemId({ ...event, positionId: position.id }),
-    cashflowQuote,
-    cashflowBase,
-    fillItemType: FillItemType.Trade,
-    fee_long,
-    fee_short,
-    liquidationPenalty: 0n,
-    positionId: position.id,
-    realisedPnl_long: 0n,
-    realisedPnl_short: 0n,
-    timestamp: event.blockTimestamp,
-    cashflowSwap_id: cashflowSwap?.id,
-    feeToken_id: partialFillItem.feeToken_id,
-    debtCostToSettle: partialFillItem.debtCostToSettle,
-    lendingProfitToSettle: partialFillItem.lendingProfitToSettle,
-  }
+  return { cashflowQuote, cashflowBase, fee_long, fee_short }
 }
+

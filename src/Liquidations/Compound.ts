@@ -3,28 +3,43 @@ import {
   ContangoLiquidationEvent
 } from "generated";
 import { eventsReducer } from "../accounting/processEvents";
-import { getBalancesAtBlock, getPairForPositionId, getPosition } from "../utils/common";
-import { createLiquidationId } from "../utils/ids";
+import { eventStore } from "../Store";
+import { getBalancesAtBlock, getMarkPrice } from "../utils/common";
+import { createEventId, createFillItemId } from "../utils/ids";
 import { max } from "../utils/math-helpers";
-import { getLiquidationPenalty, getMarkPrice, getPositionIdForProxyAddress } from "./common";
+import { EventType } from "../utils/types";
+import { getLiquidationPenalty, getPositionIdForProxyAddress } from "./common";
+import { getContract, Hex, parseAbi } from "viem";
+import { clients } from "../clients";
+
+const abi = parseAbi(["function exchangeRateCurrent() external view returns (uint256)"])
+export const wadMul = (a: bigint, b: bigint) => (a * b) / BigInt(1e18)
 
 CompoundLiquidations.LiquidateCompound.handler(async ({ event, context }) => {
   const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.borrower, context })
 
   if (positionId) {
-    const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
-    const position = await getPosition({ chainId: event.chainId, positionId, context })
-    const { debtToken, collateralToken } = await getPairForPositionId({ chainId: event.chainId, positionId, context })
-    const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
+    const snapshot = await eventStore.getCurrentPositionSnapshot({ event: { ...event, params: { positionId } }, context })
+    if (!snapshot) {
+      console.error(`no snapshot found for positionId: ${positionId} - chainId: ${event.chainId}`, event)
+      return
+    }
+
+    const { position, debtToken, collateralToken } = snapshot
+    const [balancesBefore, markPrice] = await Promise.all([
+      getBalancesAtBlock(event.chainId, positionId, event.block.number - 1),
+      getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
+    ])
 
     const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
     const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
+    const exchangeRate = await getContract({ abi, address: event.params.cTokenCollateral as Hex, client: clients[event.chainId] }).read.exchangeRateCurrent({ blockNumber: BigInt(event.block.number) })
 
     const liquidationEvent: ContangoLiquidationEvent = {
-      id: createLiquidationId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex }),
+      id: createEventId({ ...event, eventType: EventType.LIQUIDATION }),
       chainId: event.chainId,
-      positionId,
-      collateralDelta: -event.params.seizeTokens,
+      contangoPositionId: positionId,
+      collateralDelta: -wadMul(event.params.seizeTokens, exchangeRate),
       debtDelta: -event.params.repayAmount,
       blockNumber: event.block.number,
       blockTimestamp: event.block.timestamp,
@@ -32,20 +47,11 @@ CompoundLiquidations.LiquidateCompound.handler(async ({ event, context }) => {
       lendingProfitToSettle,
       debtCostToSettle,
       liquidationPenalty: getLiquidationPenalty({ collateralToken, collateralDelta: event.params.seizeTokens, debtDelta: event.params.repayAmount, markPrice }),
+      markPrice,
     }
     context.ContangoLiquidationEvent.set(liquidationEvent)
+    eventStore.addLog({ event: { ...event, params: { positionId } }, contangoEvent: { ...liquidationEvent, eventType: EventType.LIQUIDATION } })
 
-    await eventsReducer(
-      {
-        chainId: event.chainId,
-        blockNumber: event.block.number,
-        transactionHash: event.transaction.hash,
-        logIndex: event.logIndex,
-        positionId,
-        blockTimestamp: event.block.timestamp,
-      },
-      context
-    )
-
+    await eventsReducer({ ...snapshot, context })
   }
 }, { wildcard: true });

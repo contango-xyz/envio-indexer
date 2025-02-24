@@ -29,7 +29,7 @@
     "vitest": "^1.3.1"
   },
   "dependencies": {
-    "envio": "2.12.3",
+    "envio": "2.13.0",
     "viem": "2.21.0"
   },
   "optionalDependencies": {

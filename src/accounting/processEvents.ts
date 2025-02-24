@@ -1,117 +1,18 @@
 import {
-  ContangoSwapEvent,
-  ERC20_Transfer_event,
   FillItem,
   handlerContext,
   Lot,
   Position,
   Token
 } from "generated";
-import { Hex, Mutable } from "viem";
-import { getMarkPrice } from "../Liquidations/common";
-import { eventStore } from "../Store";
-import { getPairForPositionId, getPositionSnapshot, setPosition } from "../utils/common";
-import { getIMoneyMarketEventsStartBlock } from "../utils/constants";
-import { decodeTokenId } from "../utils/getTokenDetails";
-import { createIdForPosition } from "../utils/ids";
+import { Mutable } from "viem";
+import { eventStore, PositionSnapshot } from "../Store";
+import { createFillItemId, createIdForLot, createIdForPosition } from "../utils/ids";
+import { ContangoEvents, EventType, FillItemType, MigratedEvent } from "../utils/types";
+import { calculateCashflowsAndFee, eventsToPartialFillItem, withMarkPrice } from "./helpers";
+import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCostDelta, handleCloseSize, initialiseLot, savePosition } from "./lotsAccounting";
 import { max, mulDiv } from "../utils/math-helpers";
-import { ContangoEvents, EventType, MigratedEvent, TransferEvent } from "../utils/types";
-import { createEmptyPartialFillItem, partialFillItemWithCashflowEventsToFillItem, updateFillItemWithCashflowEvents } from "./helpers";
-import { deriveFillItemValuesFormPositionUpsertedEvent } from "./legacy";
-import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCostDelta, handleSizeDelta } from "./lotsAccounting";
-
-export type PartialFillItem = {
-  collateralToken: Token;
-  debtToken: Token;
-
-  cashflowSwap?: ContangoSwapEvent;
-
-  tradePrice_long: bigint; // trade price in debt/collateral terms
-  tradePrice_short: bigint; // trade price in collateral/debt terms
-
-  collateralDelta: bigint;
-  debtDelta: bigint;
-
-  debtCostToSettle: bigint; // debt accrued since last fill event
-  lendingProfitToSettle: bigint; // lending profit accrued since last fill event
-
-  fee: bigint;
-  feeToken_id?: string;
-
-  liquidationPenalty: bigint;
-}
-
-
-
-export const eventsToFillItem = (position: Position, debtToken: Token, collateralToken: Token, event: Exclude<ContangoEvents, ERC20_Transfer_event>, existingFillItem: PartialFillItem): PartialFillItem => {
-
-  switch (event.eventType) {
-    case EventType.DEBT: {
-      if (!existingFillItem.debtCostToSettle) {
-        const debtCostToSettle = max(event.balanceBefore - (position.debt + position.accruedInterest), 0n)
-        return { ...existingFillItem, debtCostToSettle, debtDelta: existingFillItem.debtDelta + event.debtDelta }
-      } else return { ...existingFillItem, debtDelta: existingFillItem.debtDelta + event.debtDelta }
-    }
-    case EventType.COLLATERAL: {
-      if (!existingFillItem.lendingProfitToSettle) {
-        const lendingProfitToSettle = max(event.balanceBefore - (position.accruedLendingProfit + position.collateral), 0n)
-        return { ...existingFillItem, lendingProfitToSettle, collateralDelta: existingFillItem.collateralDelta + event.collateralDelta }
-      } else return { ...existingFillItem, collateralDelta: existingFillItem.collateralDelta + event.collateralDelta }
-    }
-    case EventType.SWAP_EXECUTED: {
-      const [tokenIn, tokenOut] = [event.tokenIn_id, event.tokenOut_id].map(decodeTokenId)
-
-      if (tokenIn.address === debtToken.address && tokenOut.address === collateralToken.address) {
-        return {
-          ...existingFillItem,
-          tradePrice_long: mulDiv(event.amountIn, collateralToken.unit, event.amountOut),
-          tradePrice_short: mulDiv(event.amountOut, debtToken.unit, event.amountIn),
-        }
-      }
-
-      if (tokenIn.address === collateralToken.address && tokenOut.address === debtToken.address) {
-        return {
-          ...existingFillItem,
-          tradePrice_long: mulDiv(event.amountOut, collateralToken.unit, event.amountIn),
-          tradePrice_short: mulDiv(event.amountIn, debtToken.unit, event.amountOut),
-        }
-      }
-
-      return { ...existingFillItem, cashflowSwap: event }
-    }
-    case EventType.FEE_COLLECTED: {
-      return {
-        ...existingFillItem,
-        fee: event.amount,
-        feeToken_id: event.token_id,
-      }
-    }
-    case EventType.LIQUIDATION: {
-      return {
-        ...existingFillItem,
-        collateralDelta: event.collateralDelta,
-        debtDelta: event.debtDelta,
-        lendingProfitToSettle: event.lendingProfitToSettle,
-        debtCostToSettle: event.debtCostToSettle,
-        liquidationPenalty: event.liquidationPenalty,
-      }
-    }
-    case EventType.POSITION_UPSERTED: {
-      if (event.blockNumber <= getIMoneyMarketEventsStartBlock(event.chainId)) {
-        return deriveFillItemValuesFormPositionUpsertedEvent({
-          upsertedEvent: event,
-          fillItem: existingFillItem,
-          position,
-          collateralToken,
-          debtToken
-        })
-      }
-    }
-    default: {
-      return existingFillItem
-    }
-  }
-}
+import { getMarkPrice } from "../utils/common";
 
 export const processEvents = async (
   {
@@ -122,255 +23,201 @@ export const processEvents = async (
     debtToken,
     collateralToken,
   }: {
-    genericEvent: GenericEvent & { positionId: string }
+    genericEvent: GenericEvent
     events: ContangoEvents[]
     position: Position
-    lots: { longLots: Lot[], shortLots: Lot[] }
+    lots: Lot[]
     debtToken: Token
     collateralToken: Token
   }
 ) => {
-  const { chainId, blockNumber } = genericEvent
+  const { block: { number: blockNumber }, transaction: { hash: transactionHash } } = genericEvent
 
-  let partialFillItem = events.filter((e): e is Exclude<ContangoEvents, TransferEvent> => e.eventType !== EventType.TRANSFER).reduce((acc, event) => {
-    return eventsToFillItem(positionSnapshot, debtToken, collateralToken, event, acc)
-  }, createEmptyPartialFillItem({ collateralToken, debtToken }))
+  // create the basic (partial) fillItem
+  const partialFillItem = await withMarkPrice(positionSnapshot, eventsToPartialFillItem(positionSnapshot, debtToken, collateralToken, events), blockNumber, debtToken, collateralToken)
 
-  if (partialFillItem.tradePrice_long === 0n || partialFillItem.tradePrice_short === 0n) {
-    const markPrice = await getMarkPrice({ chainId, positionId: positionSnapshot.positionId as Hex, blockNumber, debtToken })
-    partialFillItem.tradePrice_long = markPrice
-    partialFillItem.tradePrice_short = mulDiv(debtToken.unit, collateralToken.unit, markPrice)
-  }
+  const { cashflowQuote, cashflowBase, fee_long, fee_short } = calculateCashflowsAndFee(partialFillItem, debtToken, collateralToken, partialFillItem.dust)
 
-  let fillItemWithCashflowEvents = events.filter((e): e is TransferEvent => e.eventType === EventType.TRANSFER).reduce((acc, event) => {
-    return updateFillItemWithCashflowEvents({ fillItem: acc, owner: positionSnapshot.owner, event })
-  }, {
+  const fillItem: Mutable<FillItem> = {
     ...partialFillItem,
-    cashflowQuote: 0n,
-    cashflowBase: 0n,
-    cashflow: 0n,
-  })
-
-  const fillItem = partialFillItemWithCashflowEventsToFillItem(fillItemWithCashflowEvents, positionSnapshot, genericEvent)
-
-  let longLots: Mutable<Lot>[] = [...lotsSnapshot.longLots] // create a copy
-  let shortLots: Mutable<Lot>[] = [...lotsSnapshot.shortLots] // create a copy
-
-  if (fillItem.debtCostToSettle > 0n) {
-    longLots = await allocateFundingCostToLots({ lots: longLots, fundingCostToSettle: fillItem.debtCostToSettle })
-    shortLots = await allocateFundingProfitToLots({ lots: shortLots, fundingProfitToSettle: fillItem.debtCostToSettle })
-  }
-
-  if (fillItem.lendingProfitToSettle > 0n) {
-    longLots = await allocateFundingProfitToLots({ lots: longLots, fundingProfitToSettle: fillItem.lendingProfitToSettle })
-    shortLots = await allocateFundingCostToLots({ lots: shortLots, fundingCostToSettle: fillItem.lendingProfitToSettle })
-  }
-
-  const sizeDeltaLong = fillItem.collateralDelta
-  const sizeDeltaShort = fillItem.debtDelta
-
-  const costDeltaLong = fillItem.debtDelta + fillItem.cashflowQuote
-  const costDeltaShort = fillItem.collateralDelta
-
-  longLots = handleSizeDelta({ lots: longLots, position: positionSnapshot, fillItem, sizeDelta: sizeDeltaLong, accountingType: AccountingType.Long, ...genericEvent })
-  shortLots = handleSizeDelta({ lots: shortLots, position: positionSnapshot, fillItem, sizeDelta: sizeDeltaShort, accountingType: AccountingType.Short, ...genericEvent })
-
-  longLots = handleCostDelta({ lots: longLots, fillItem, costDelta: costDeltaLong, accountingType: AccountingType.Long, ...genericEvent })
-  shortLots = handleCostDelta({ lots: shortLots, fillItem, costDelta: costDeltaShort, accountingType: AccountingType.Short, ...genericEvent })
-
-  fillItem.realisedPnl_short *= -1n
-  const realisedPnl_long = fillItem.realisedPnl_long - positionSnapshot.realisedPnl_long
-  const realisedPnl_short = fillItem.realisedPnl_short + positionSnapshot.realisedPnl_short
-
-  const cashflowQuote = positionSnapshot.cashflowQuote + fillItem.cashflowQuote
-  const cashflowBase = positionSnapshot.cashflowBase + fillItem.cashflowBase
-
-  const fees_long = positionSnapshot.fees_long + fillItem.fee_long
-  const fees_short = positionSnapshot.fees_short + fillItem.fee_short
-
-  longLots = longLots.filter(lot => lot.size > 0n).map((lot, idx, array) => ({ ...lot, nextLotId: array[idx + 1]?.id }))
-  shortLots = shortLots.filter(lot => lot.size > 0n).map((lot, idx, array) => ({ ...lot, nextLotId: array[idx + 1]?.id }))
-
-  const firstLotId_long = longLots[0]?.id || positionSnapshot.firstLotId_long
-  const firstLotId_short = shortLots[0]?.id || positionSnapshot.firstLotId_short
-
-  const newPosition = {
-    ...positionSnapshot,
+    id: createFillItemId({ ...genericEvent, positionId: positionSnapshot.contangoPositionId }),
+    timestamp: genericEvent.block.timestamp,
+    chainId: genericEvent.chainId,
+    blockNumber,
+    transactionHash,
+    contangoPositionId: positionSnapshot.contangoPositionId,
+    fee_long,
+    fee_short,
+    realisedPnl_long: 0n,
+    realisedPnl_short: 0n,
     cashflowQuote,
     cashflowBase,
-    fees_long,
-    fees_short,
-    realisedPnl_long,
-    realisedPnl_short,
-    firstLotId_long,
-    firstLotId_short,
+    cashflowSwap_id: partialFillItem.cashflowSwap?.id,
+    fee: partialFillItem.fee,
+    feeToken_id: partialFillItem.feeToken_id,
+    position_id: positionSnapshot.id,
+    dust: partialFillItem.dust?.value ?? 0n,
+  } as const satisfies FillItem
+
+  let longLots: Mutable<Lot>[] = [...lotsSnapshot.filter(lot => lot.accountingType === AccountingType.Long)] // create a copy
+  let shortLots: Mutable<Lot>[] = [...lotsSnapshot.filter(lot => lot.accountingType === AccountingType.Short)] // create a copy
+
+  longLots = await allocateFundingProfitToLots({ lots: longLots, fundingProfitToSettle: fillItem.lendingProfitToSettle }) // size grows, which is a good thing
+  longLots = await allocateFundingCostToLots({ lots: longLots, fundingCostToSettle: -fillItem.debtCostToSettle }) // cost grows
+  
+  shortLots = await allocateFundingProfitToLots({ lots: shortLots, fundingProfitToSettle: fillItem.debtCostToSettle }) // size grows, but it's actually a negative thing because your size is your debt!
+  shortLots = await allocateFundingCostToLots({ lots: shortLots, fundingCostToSettle: -fillItem.lendingProfitToSettle }) // cost grows, but it's actually a good thing because your cost is your collateral!
+
+  const shortCost = fillItem.collateralDelta - fillItem.cashflowBase
+  if (fillItem.debtDelta > 0n) {
+    // create new short lot if adding debt
+    shortLots.push(
+      initialiseLot({
+        event: genericEvent,
+        position: positionSnapshot,
+        accountingType: AccountingType.Short,
+        size: -fillItem.debtDelta,
+        cost: shortCost
+      })
+    )
+  } else if (fillItem.debtDelta < 0n) {
+    fillItem.realisedPnl_short += shortCost
+    shortLots = handleCloseSize({ lots: shortLots, position: positionSnapshot, fillItem, sizeDelta: fillItem.debtDelta, accountingType: AccountingType.Short, ...genericEvent })
+  }
+
+  const longCost = -(fillItem.cashflowQuote + fillItem.debtDelta)
+  if (fillItem.collateralDelta > 0n) {
+    // create new long lot if adding collateral
+    longLots.push(
+      initialiseLot({
+        event: genericEvent,
+        position: positionSnapshot,
+        accountingType: AccountingType.Long,
+        size: fillItem.collateralDelta,
+        cost: longCost
+      })
+    )
+  } else if (fillItem.collateralDelta < 0n) {
+    fillItem.realisedPnl_long += longCost
+    longLots = handleCloseSize({ lots: longLots, position: positionSnapshot, fillItem, sizeDelta: fillItem.collateralDelta, accountingType: AccountingType.Long, ...genericEvent })
+  }
+
+  // update the position
+  const newPosition: Position = {
+    ...positionSnapshot,
+    cashflowQuote: positionSnapshot.cashflowQuote + fillItem.cashflowQuote,
+    cashflowBase: positionSnapshot.cashflowBase + fillItem.cashflowBase,
+    fees_long: positionSnapshot.fees_long + fillItem.fee_long,
+    fees_short: positionSnapshot.fees_short + fillItem.fee_short,
+    realisedPnl_long: fillItem.realisedPnl_long - positionSnapshot.realisedPnl_long,
+    realisedPnl_short: fillItem.realisedPnl_short + positionSnapshot.realisedPnl_short,
     collateral: positionSnapshot.collateral + fillItem.collateralDelta,
     debt: positionSnapshot.debt + fillItem.debtDelta,
     accruedLendingProfit: positionSnapshot.accruedLendingProfit + fillItem.lendingProfitToSettle,
     accruedInterest: positionSnapshot.accruedInterest + fillItem.debtCostToSettle,
   }
 
-  const newFillItem = {
-    id: fillItem.id,
-    timestamp: fillItem.timestamp,
-    chainId: fillItem.chainId,
-    blockNumber: fillItem.blockNumber,
-    transactionHash: fillItem.transactionHash,
-    positionId: fillItem.positionId,
-    collateralDelta: fillItem.collateralDelta,
-    debtDelta: fillItem.debtDelta,
-    tradePrice_long: fillItem.tradePrice_long,
-    tradePrice_short: fillItem.tradePrice_short,
-    debtCostToSettle: fillItem.debtCostToSettle,
-    lendingProfitToSettle: fillItem.lendingProfitToSettle,
-    fee_long: fillItem.fee_long,
-    fee_short: fillItem.fee_short,
-    realisedPnl_long: fillItem.realisedPnl_long,
-    realisedPnl_short: fillItem.realisedPnl_short,
-    cashflowQuote: fillItem.cashflowQuote,
-    cashflowBase: fillItem.cashflowBase,
-    cashflow: fillItem.cashflow,
-    cashflowToken_id: fillItem.cashflowToken_id ?? collateralToken.id,
-    cashflowSwap_id: fillItem.cashflowSwap_id,
-    fee: fillItem.fee,
-    feeToken_id: fillItem.feeToken_id,
-    fillItemType: fillItem.fillItemType,
-    liquidationPenalty: fillItem.liquidationPenalty,
-  } as const satisfies FillItem
-
-  return { position: newPosition, fillItem: newFillItem, lots: { longLots, shortLots } }
+  // return the new position, fillItem, and lots
+  return { position: newPosition, fillItem, lots: { longLots, shortLots } }
 }
 
-export const eventsReducer = async (maybeLastEventInTx: GenericEvent & { positionId: string }, context: handlerContext) => {
+export const eventsReducer = async ({ context, position, lots, collateralToken, debtToken, event }: PositionSnapshot & { context: handlerContext }) => {
+  const { chainId, block: { timestamp, number: blockNumber }, transaction: { hash: transactionHash } } = event
 
-  const { chainId, blockNumber, transactionHash, positionId } = maybeLastEventInTx
-  const { position: positionSnapshot, lots: lotsSnapshot } = await getPositionSnapshot({ chainId, positionId, blockNumber, transactionHash, context })
+  try {
+    const events = eventStore.getContangoEvents(event)
+    const migrationEvent = events.find(e => e.eventType === EventType.MIGRATED)
+    if (migrationEvent) {
+      const { newContangoPositionId, oldContangoPositionId } = migrationEvent as MigratedEvent
+      context.Position.deleteUnsafe(position.id)
 
-  const { debtToken, collateralToken } = await getPairForPositionId({ positionId, chainId, context })
+      const getEventsForPositionId = (positionId: string) => {
+        return events.filter(e => {
+          if (e.eventType === EventType.COLLATERAL && e.contangoPositionId === positionId) return true
+          if (e.eventType === EventType.DEBT && e.contangoPositionId === positionId) return true
+          if (e.eventType === EventType.FEE_COLLECTED && e.contangoPositionId === positionId) return true
+          if (e.eventType === EventType.LIQUIDATION && e.contangoPositionId === positionId) return true
+          if (e.eventType === EventType.POSITION_UPSERTED && e.contangoPositionId === positionId) return true
+          return false
+        })
+      }
+      
+      const fillItem: Mutable<FillItem> = {
+        ...eventsToPartialFillItem(position, debtToken, collateralToken, getEventsForPositionId(oldContangoPositionId)),
+        id: createFillItemId({ ...event, positionId: oldContangoPositionId }),
+        timestamp,
+        chainId,
+        blockNumber,
+        transactionHash,
+        contangoPositionId: oldContangoPositionId,
+        fee_long: 0n,
+        fee_short: 0n,
+        realisedPnl_long: 0n,
+        realisedPnl_short: 0n,
+        cashflowQuote: 0n,
+        cashflowBase: 0n,
+        cashflowSwap_id: undefined,
+        fee: 0n,
+        feeToken_id: undefined,
+        position_id: position.id,
+        dust: 0n,
+        fillItemType: FillItemType.MigrationClose,
+      } as const satisfies FillItem
 
-  const events = eventStore.getEvents({ chainId, blockNumber, transactionHash })
+      context.FillItem.set(fillItem)
 
-  const migrationEvent = events.find(e => e.eventType === EventType.MIGRATED)
-  if (migrationEvent) {
-    const { newPositionId, oldPositionId } = migrationEvent as MigratedEvent
-    context.Position.deleteUnsafe(createIdForPosition({ chainId, positionId: oldPositionId }))
-    context.Position.set({
-      ...positionSnapshot,
-      id: createIdForPosition({ chainId, positionId: newPositionId }),
-      positionId: newPositionId,
-    })
-    return
-  }
+      const openingFillItem: FillItem = {
+        ...eventsToPartialFillItem(position, debtToken, collateralToken, getEventsForPositionId(newContangoPositionId)),
+        id: createFillItemId({ ...event, positionId: newContangoPositionId }),
+        timestamp,
+        chainId,
+        blockNumber,
+        transactionHash,
+        contangoPositionId: newContangoPositionId,
+        fee_long: 0n,
+        fee_short: 0n,
+        realisedPnl_long: 0n,
+        realisedPnl_short: 0n,
+        cashflowQuote: 0n,
+        cashflowBase: 0n,
+        cashflowSwap_id: undefined,
+        fee: 0n,
+        feeToken_id: undefined,
+        position_id: position.id,
+        dust: 0n,
+        fillItemType: FillItemType.MigrationOpen,
+      } as const satisfies FillItem
 
-  let partialFillItem = events.filter((e): e is Exclude<ContangoEvents, TransferEvent> => e.eventType !== EventType.TRANSFER).reduce((acc, event) => {
-    return eventsToFillItem(positionSnapshot, debtToken, collateralToken, event, acc)
-  }, createEmptyPartialFillItem({ collateralToken, debtToken }))
+      context.FillItem.set(openingFillItem)
 
-  if (partialFillItem.tradePrice_long === 0n || partialFillItem.tradePrice_short === 0n) {
-    const markPrice = await getMarkPrice({ chainId, positionId: positionSnapshot.positionId as Hex, blockNumber, debtToken })
-    partialFillItem.tradePrice_long = markPrice
-    partialFillItem.tradePrice_short = mulDiv(debtToken.unit, collateralToken.unit, markPrice)
-  }
+      const newPosition = {
+        ...position,
+        id: createIdForPosition({ chainId, positionId: newContangoPositionId }),
+        contangoPositionId: newContangoPositionId,
+        isOpen: true,
+      }
 
-  let fillItemWithCashflowEvents = events.filter((e): e is TransferEvent => e.eventType === EventType.TRANSFER).reduce((acc, event) => {
-    return updateFillItemWithCashflowEvents({ fillItem: acc, owner: positionSnapshot.owner, event })
-  }, {
-    ...partialFillItem,
-    cashflowQuote: 0n,
-    cashflowBase: 0n,
-    cashflow: 0n,
-  })
+      const newLots = lots.map((lot, index) => ({
+        ...lot,
+        id: createIdForLot({ chainId, positionId: newContangoPositionId, index }),
+        contangoPositionId: newContangoPositionId,
+      }))
 
-  const fillItem = partialFillItemWithCashflowEventsToFillItem(fillItemWithCashflowEvents, positionSnapshot, maybeLastEventInTx)
+      for (const lot of lots) {
+        context.Lot.deleteUnsafe(lot.id)
+      }
 
-  let longLots: Mutable<Lot>[] = [...lotsSnapshot.longLots] // create a copy
-  let shortLots: Mutable<Lot>[] = [...lotsSnapshot.shortLots] // create a copy
+      await savePosition({ position: newPosition, lots: newLots, context })
 
-  if (fillItem.debtCostToSettle > 0n) {
-    longLots = await allocateFundingCostToLots({ lots: longLots, fundingCostToSettle: fillItem.debtCostToSettle })
-    shortLots = await allocateFundingProfitToLots({ lots: shortLots, fundingProfitToSettle: fillItem.debtCostToSettle })
-  }
+      return
+    }
 
-  if (fillItem.lendingProfitToSettle > 0n) {
-    longLots = await allocateFundingProfitToLots({ lots: longLots, fundingProfitToSettle: fillItem.lendingProfitToSettle })
-    shortLots = await allocateFundingCostToLots({ lots: shortLots, fundingCostToSettle: fillItem.lendingProfitToSettle })
-  }
-
-  const sizeDeltaLong = fillItem.collateralDelta
-  const sizeDeltaShort = fillItem.debtDelta
-
-  const costDeltaLong = fillItem.debtDelta + fillItem.cashflowQuote
-  const costDeltaShort = fillItem.collateralDelta
-
-  longLots = handleSizeDelta({ lots: longLots, position: positionSnapshot, fillItem, sizeDelta: sizeDeltaLong, accountingType: AccountingType.Long, ...maybeLastEventInTx })
-  shortLots = handleSizeDelta({ lots: shortLots, position: positionSnapshot, fillItem, sizeDelta: sizeDeltaShort, accountingType: AccountingType.Short, ...maybeLastEventInTx })
-
-  longLots = handleCostDelta({ lots: longLots, fillItem, costDelta: costDeltaLong, accountingType: AccountingType.Long, ...maybeLastEventInTx })
-  shortLots = handleCostDelta({ lots: shortLots, fillItem, costDelta: costDeltaShort, accountingType: AccountingType.Short, ...maybeLastEventInTx })
-
-  fillItem.realisedPnl_short *= -1n
-  const realisedPnl_long = fillItem.realisedPnl_long - positionSnapshot.realisedPnl_long
-  const realisedPnl_short = fillItem.realisedPnl_short + positionSnapshot.realisedPnl_short
-
-  const cashflowQuote = positionSnapshot.cashflowQuote + fillItem.cashflowQuote
-  const cashflowBase = positionSnapshot.cashflowBase + fillItem.cashflowBase
-
-  const fees_long = positionSnapshot.fees_long + fillItem.fee_long
-  const fees_short = positionSnapshot.fees_short + fillItem.fee_short
-
-  longLots = longLots.filter(lot => lot.size > 0n).map((lot, idx, array) => ({ ...lot, nextLotId: array[idx + 1]?.id }))
-  shortLots = shortLots.filter(lot => lot.size > 0n).map((lot, idx, array) => ({ ...lot, nextLotId: array[idx + 1]?.id }))
-
-  const firstLotId_long = longLots[0]?.id || positionSnapshot.firstLotId_long
-  const firstLotId_short = shortLots[0]?.id || positionSnapshot.firstLotId_short
-
-  const newPosition = {
-    ...positionSnapshot,
-    cashflowQuote,
-    cashflowBase,
-    fees_long,
-    fees_short,
-    realisedPnl_long,
-    realisedPnl_short,
-    firstLotId_long,
-    firstLotId_short,
-    collateral: positionSnapshot.collateral + fillItem.collateralDelta,
-    debt: positionSnapshot.debt + fillItem.debtDelta,
-    accruedLendingProfit: positionSnapshot.accruedLendingProfit + fillItem.lendingProfitToSettle,
-    accruedInterest: positionSnapshot.accruedInterest + fillItem.debtCostToSettle,
-  }
-
-  const newFillItem = {
-    id: fillItem.id,
-    timestamp: fillItem.timestamp,
-    chainId: fillItem.chainId,
-    blockNumber: fillItem.blockNumber,
-    transactionHash: fillItem.transactionHash,
-    positionId: fillItem.positionId,
-    collateralDelta: fillItem.collateralDelta,
-    debtDelta: fillItem.debtDelta,
-    tradePrice_long: fillItem.tradePrice_long,
-    tradePrice_short: fillItem.tradePrice_short,
-    debtCostToSettle: fillItem.debtCostToSettle,
-    lendingProfitToSettle: fillItem.lendingProfitToSettle,
-    fee_long: fillItem.fee_long,
-    fee_short: fillItem.fee_short,
-    realisedPnl_long: fillItem.realisedPnl_long,
-    realisedPnl_short: fillItem.realisedPnl_short,
-    cashflowQuote: fillItem.cashflowQuote,
-    cashflowBase: fillItem.cashflowBase,
-    cashflow: fillItem.cashflow,
-    cashflowToken_id: fillItem.cashflowToken_id ?? collateralToken.id,
-    cashflowSwap_id: fillItem.cashflowSwap_id,
-    fee: fillItem.fee,
-    feeToken_id: fillItem.feeToken_id,
-    fillItemType: fillItem.fillItemType,
-    liquidationPenalty: fillItem.liquidationPenalty,
-  } as const satisfies FillItem
-
-  context.FillItem.set(newFillItem)
-  setPosition(newPosition, { longLots, shortLots }, { blockNumber: maybeLastEventInTx.blockNumber, transactionHash: maybeLastEventInTx.transactionHash, context })
+    const result = await processEvents({ genericEvent: event, events, position, lots, debtToken, collateralToken })
   
-  // Run cleanup with the next block number to ensure proper event removal
-  eventStore.cleanup(chainId, blockNumber + 1)
+    context.FillItem.set(result.fillItem)
+    await savePosition({ position: result.position, lots: [...result.lots.longLots, ...result.lots.shortLots], context })
+  } catch (e) {
+    console.error('error processing events', e)
+    return null
+  }
 }

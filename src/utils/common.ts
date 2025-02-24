@@ -1,14 +1,15 @@
-import { Instrument, Lot, Position, Token, handlerContext } from "generated";
+import { Instrument, Token, handlerContext } from "generated";
 import { Hex, getContract, parseAbi } from "viem";
-import { createInstrumentId } from "../ContangoProxy";
-import { eventStore } from "../Store";
-import { contangoAbi } from "../abis";
-import { loadLots, saveLots } from "../accounting/lotsAccounting";
+import { contangoAbi, iAaveOracleAbi, iContangoLensAbi, iPoolAddressesProviderAbi } from "../abis";
 import { clients } from "../clients";
 import { Cache, CacheCategory } from "./cache";
 import { decodeTokenId, getOrCreateToken } from "./getTokenDetails";
 import { createIdForPosition } from "./ids";
+import { mulDiv } from "./math-helpers";
 import { ReturnPromiseType } from "./types";
+import { positionIdMapper } from "./mappers";
+import { contangoProxy } from "../ERC20";
+import { arbitrum, avalanche, base, bsc, gnosis, mainnet, optimism, polygon, scroll } from "viem/chains";
 
 export const lensAbi = parseAbi([
   "struct Balances { uint256 collateral; uint256 debt; }",
@@ -38,17 +39,103 @@ export const _getBalancesAtBlock = async (chainId: number, positionId: Hex, bloc
 
 export type Balances = ReturnPromiseType<typeof _getBalancesAtBlock>
 
-export const getBalancesAtBlock = async (chainId: number, positionId: Hex, blockNumber: number) => {
+export const getBalancesAtBlock = async (chainId: number, positionId: string, blockNumber: number) => {
   const cached = Cache.init({ category: CacheCategory.Balances, chainId })
   const balances = cached.read(`${positionId}-${blockNumber}`)
   if (balances) return balances
 
-  const balancesFromChain = await _getBalancesAtBlock(chainId, positionId, blockNumber)
+  const balancesFromChain = await _getBalancesAtBlock(chainId, positionId as Hex, blockNumber)
   cached.add({ [`${positionId}-${blockNumber}`]: balancesFromChain })
   return balancesFromChain
 }
 
-const getInstrument = async (chainId: number, positionId: string, context: handlerContext) => {
+export const createInstrumentId = ({ chainId, instrumentId }: { chainId: number; instrumentId: string; }) => `${chainId}_${instrumentId.slice(0, 34)}`
+
+const getPrices = async ({ chainId, positionId, blockNumber }: { chainId: number; positionId: string; blockNumber: bigint }) => {
+  const { symbolHex } = positionIdMapper(positionId)
+  const client = clients[chainId]
+  const lens = getContract({ abi: iContangoLensAbi, address: lensAddress, client })
+  const contango = getContract({ abi: contangoAbi, address: contangoProxy, client })
+
+  try {
+    return await lens.read.prices([positionId as Hex], { blockNumber })
+  } catch {
+    const name = chainId === gnosis.id ? "Spark" : "Aave"
+    console.warn(`Lens prices failed, falling back to ${name}Oracle`)
+
+    const poolAddressesProviderAddress = (() => {
+      switch (chainId) {
+        case avalanche.id:
+        case polygon.id:
+        case optimism.id:
+        case arbitrum.id:
+          return '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb'
+        case mainnet.id:
+          return '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e'
+        case base.id:
+          return '0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D'
+        case bsc.id:
+          return '0xff75B6da14FfbbfD355Daf7a2731456b3562Ba6D'
+        case scroll.id:
+          return '0x69850D0B276776781C063771b161bd8894BCdD04'
+        case gnosis.id:
+          return '0xA98DaCB3fC964A6A0d2ce3B77294241585EAbA6d'
+        default: {
+          throw new Error(`Unsupported chainId: ${chainId}`)
+        }
+      }
+    })()
+
+    const poolAddressesProvider = getContract({
+      abi: iPoolAddressesProviderAbi,
+      address: poolAddressesProviderAddress,
+      client,
+    })
+    const [instrument, aaveOracleAddress] = await Promise.all([
+      contango.read.instrument([symbolHex], { blockNumber }),
+      poolAddressesProvider.read.getPriceOracle({ blockNumber }),
+    ])
+
+    const aaveOracle = getContract({ abi: iAaveOracleAbi, address: aaveOracleAddress, client })
+
+    const getAssetPrice = async (asset: Hex) => {
+      try {
+        return await aaveOracle.read.getAssetPrice([asset], { blockNumber })
+      } catch {
+        console.warn(`Failed to get price for ${asset} at block ${blockNumber} on chain ${chainId}, returning 0n`)
+        return 0n
+      }
+    }
+
+    const [collateral, debt, unit] = await Promise.all([
+      getAssetPrice(instrument.base),
+      getAssetPrice(instrument.quote),
+      aaveOracle.read.BASE_CURRENCY_UNIT({ blockNumber }),
+    ])
+
+    return { collateral: collateral, debt: debt, unit: unit }
+  }
+}
+
+export const getMarkPrice = async ({ chainId, positionId, blockNumber, debtToken }: { debtToken: Token; chainId: number; positionId: string; blockNumber: number }): Promise<bigint> => {
+  const cached = Cache.init({ category: CacheCategory.MarkPrice, chainId })
+  const id = `${createInstrumentId({ chainId, instrumentId: positionId })}-${blockNumber}`
+  const markPrice = cached.read(id)
+  if (markPrice) return markPrice
+
+  try {
+    const prices = await getPrices({ chainId, positionId, blockNumber: BigInt(blockNumber) })
+    const price = mulDiv(prices.collateral, debtToken.unit, prices.debt)
+    cached.add({ [id]: price })
+    return price
+  } catch {
+    console.log('Failed to get mark price for positionId: ', positionId)
+    return 0n
+  }
+
+}
+
+const getInstrument = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext; }) => {
   const instrumentId = positionId.slice(0, 34) as Hex
   const cached = Cache.init({ category: CacheCategory.Instrument, chainId })
   const instrument = cached.read(instrumentId)
@@ -81,12 +168,10 @@ const getInstrument = async (chainId: number, positionId: string, context: handl
 }
 
 export const getOrCreateInstrument = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext }) => {
-  const instrumentId = positionId.slice(0, 34)
-
-  const storedInstrument = await context.Instrument.get(createInstrumentId({ chainId, instrumentId }))
+  const storedInstrument = await context.Instrument.get(createInstrumentId({ chainId, instrumentId: positionId }))
   if (storedInstrument) return storedInstrument
 
-  const instrument = await getInstrument(chainId, instrumentId, context)
+  const instrument = await getInstrument({ chainId, positionId, context })
   context.Instrument.set(instrument)
 
   return instrument
@@ -94,7 +179,7 @@ export const getOrCreateInstrument = async ({ chainId, positionId, context }: { 
 
 export const getPairForPositionId = async (
   { positionId, context, chainId }: { chainId: number; positionId: string; context: handlerContext }
-): Promise<{ collateralToken: Token; debtToken: Token }> => {
+): Promise<{ collateralToken: Token; debtToken: Token; instrument: Instrument }> => {
   const instrument = await getOrCreateInstrument({ chainId, positionId, context })
 
   try {
@@ -106,7 +191,7 @@ export const getPairForPositionId = async (
     if (!collateralToken) throw new Error(`Token not found for ${instrument.collateralToken_id} positionId: ${positionId}`)
     if (!debtToken) throw new Error(`Token not found for ${instrument.debtToken_id} positionId: ${positionId}`)
   
-    return { collateralToken, debtToken }
+    return { collateralToken, debtToken, instrument }
   } catch (e) {
     context.log.error(`Error getting pair for positionId: ${positionId} - instrument: ${instrument.id} ${instrument.collateralToken_id} ${instrument.debtToken_id}`)
     throw e
@@ -120,61 +205,6 @@ export const getPosition = async ({ chainId, positionId, context }: { chainId: n
   return { ...position }
 }
 
-// Add a new type for position snapshots
-type PositionSnapshot = {
-  position: Position;
-  lots: {
-    longLots: Lot[];
-    shortLots: Lot[];
-  };
-  blockNumber: number;
-}
-
-// Add a simple in-memory cache for position snapshots
-const positionSnapshotCache = new Map<string, PositionSnapshot>()
-
-// always get the snapshot of the position, as it was BEFORE the transaction was processed
-export const getPositionSnapshot = async (
-  { chainId, positionId, blockNumber, transactionHash, context }: { blockNumber: number; transactionHash: string; chainId: number; positionId: string; context: handlerContext }
-) => {
-  const snapshotFromStore = eventStore.getCurrentPosition({ chainId, blockNumber, transactionHash })
-  if (snapshotFromStore) return snapshotFromStore
-
-  const cacheKey = `${chainId}-${positionId}`
-  const cachedSnapshot = positionSnapshotCache.get(cacheKey)
-  
-  // Use cached snapshot if it's from the same block
-  if (cachedSnapshot && cachedSnapshot.blockNumber === blockNumber) {
-    return {
-      position: { ...cachedSnapshot.position },
-      lots: {
-        longLots: [...cachedSnapshot.lots.longLots],
-        shortLots: [...cachedSnapshot.lots.shortLots]
-      }
-    }
-  }
-
-  const position = await getPosition({ chainId, positionId, context })
-  const lots = await loadLots({ position, context })
-
-  // Cache the new snapshot
-  positionSnapshotCache.set(cacheKey, {
-    position,
-    lots,
-    blockNumber
-  })
-
-  // Clean old entries from cache (from previous blocks)
-  for (const [key, snapshot] of positionSnapshotCache.entries()) {
-    if (snapshot.blockNumber < blockNumber) {
-      positionSnapshotCache.delete(key)
-    }
-  }
-
-  eventStore.setCurrentPosition({ position, lots, blockNumber, transactionHash })
-
-  return { position, lots }
-}
 
 export const getPositionSafe = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext }) => {
   try {
@@ -184,22 +214,3 @@ export const getPositionSafe = async ({ chainId, positionId, context }: { chainI
   }
 }
 
-export const setPosition = async (
-  position: Position,
-  lots: { longLots: Lot[]; shortLots: Lot[] },
-  { blockNumber, transactionHash, context }: { blockNumber: number; transactionHash: string; context: handlerContext; }
-) => {
-  // Update cache
-  const cacheKey = `${position.chainId}-${position.positionId}`
-  positionSnapshotCache.set(cacheKey, {
-    position,
-    lots,
-    blockNumber
-  })
-
-  // Batch save position and lots
-  await Promise.all([
-    context.Position.set(position),
-    saveLots({ lots: [...lots.longLots, ...lots.shortLots], context })
-  ])
-}

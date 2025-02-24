@@ -7,10 +7,10 @@ import { EventType } from "./utils/types";
 // Debt events
 IMoneyMarket.Borrowed.handler(async ({ event, context }) => {
   const asset = await getOrCreateToken({ address: event.params.asset, chainId: event.chainId, context })
-  const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.DEBT })
+  const eventId = createEventId({ ...event, eventType: EventType.DEBT })
   const entity: ContangoDebtEvent = {
     id: eventId,
-    positionId: event.params.positionId,
+    contangoPositionId: event.params.positionId,
     debtDelta: event.params.amount,
     asset_id: asset.id,
     balanceBefore: event.params.balanceBefore,
@@ -21,16 +21,16 @@ IMoneyMarket.Borrowed.handler(async ({ event, context }) => {
   }
 
   context.ContangoDebtEvent.set(entity)
-  eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.DEBT } })
+  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.DEBT } })
 
 }, { wildcard: true })
 
 IMoneyMarket.Repaid.handler(async ({ event, context }) => {
   const asset = await getOrCreateToken({ address: event.params.asset, chainId: event.chainId, context })
-  const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.DEBT })
+  const eventId = createEventId({ ...event, eventType: EventType.DEBT })
   const entity: ContangoDebtEvent = {
     id: eventId,
-    positionId: event.params.positionId,
+    contangoPositionId: event.params.positionId,
     debtDelta: -event.params.amount,
     asset_id: asset.id,
     balanceBefore: event.params.balanceBefore,
@@ -41,7 +41,7 @@ IMoneyMarket.Repaid.handler(async ({ event, context }) => {
   }
 
   context.ContangoDebtEvent.set(entity)
-  eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.DEBT } })
+  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.DEBT } })
 
 }, { wildcard: true })
 
@@ -49,10 +49,10 @@ IMoneyMarket.Repaid.handler(async ({ event, context }) => {
 
 IMoneyMarket.Lent.handler(async ({ event, context }) => {
   const asset = await getOrCreateToken({ address: event.params.asset, chainId: event.chainId, context })
-  const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.COLLATERAL })
+  const eventId = createEventId({ ...event, eventType: EventType.COLLATERAL })
   const entity: ContangoCollateralEvent = {
     id: eventId,
-    positionId: event.params.positionId,
+    contangoPositionId: event.params.positionId,
     collateralDelta: event.params.amount,
     asset_id: asset.id,
     balanceBefore: event.params.balanceBefore,
@@ -63,16 +63,16 @@ IMoneyMarket.Lent.handler(async ({ event, context }) => {
   }
 
   context.ContangoCollateralEvent.set(entity)
-  eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.COLLATERAL } })
+  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.COLLATERAL } })
 
 }, { wildcard: true })
 
 IMoneyMarket.Withdrawn.handler(async ({ event, context }) => {
   const asset = await getOrCreateToken({ address: event.params.asset, chainId: event.chainId, context })
-  const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.COLLATERAL })
+  const eventId = createEventId({ ...event, eventType: EventType.COLLATERAL })
   const entity: ContangoCollateralEvent = {
     id: eventId,
-    positionId: event.params.positionId,
+    contangoPositionId: event.params.positionId,
     collateralDelta: -event.params.amount,
     asset_id: asset.id,
     balanceBefore: event.params.balanceBefore,
@@ -83,6 +83,6 @@ IMoneyMarket.Withdrawn.handler(async ({ event, context }) => {
   }
 
   context.ContangoCollateralEvent.set(entity)
-  eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.COLLATERAL } })
+  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.COLLATERAL } })
 
 }, { wildcard: true })

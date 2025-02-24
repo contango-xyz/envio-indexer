@@ -1,22 +1,26 @@
-import { ERC20_Transfer_event, Lot, Position } from "generated"
-import { decodeStoreKey, eventIdToStoreKey } from "./utils/ids"
-import { StoreKey, createStoreKey } from "./utils/ids"
-import { EventId } from "./utils/ids"
-import { ContangoEvents } from "./utils/types"
+import { handlerContext, Instrument, Lot, Position, Token } from "generated"
+import { EventWithPositionId, GenericEvent, loadLots } from "./accounting/lotsAccounting"
+import { eventsReducer } from "./accounting/processEvents"
+import { getPairForPositionId, getPosition } from "./utils/common"
+import { createStoreKey, decodeStoreKey, StoreKey } from "./utils/ids"
 import { recordKeys } from "./utils/record-utils"
-import { Chain } from "viem"
-import { Lot_t, Position_t } from "generated/src/db/Entities.gen"
+import { ContangoEvents } from "./utils/types"
 
 type Store = Record<StoreKey, ContangoEvents[]>
 
-// `${chainId}-${blockNumber}-${transactionHash}`
-type CurrentPositionKey = `${number}-${number}-${string}`
+export type PositionSnapshot = {
+  position: Position
+  debtToken: Token
+  collateralToken: Token
+  instrument: Instrument
+  lots: Lot[]
+  event: GenericEvent
+}
 
 class EventStore {
-  private currentPosition: Record<CurrentPositionKey, { position: Position_t, lots: { longLots: Lot_t[], shortLots: Lot_t[] } }> = {}
+  private currentPositionSnapshot: Record<StoreKey, PositionSnapshot | null> = { }
   private store: Store = {}
   private static instance: EventStore
-  private static readonly MAX_BLOCK_AGE = 100
   private static readonly MAX_EVENTS_PER_TX = 1000 // Limit events per transaction
 
   private constructor() {}
@@ -28,31 +32,39 @@ class EventStore {
     return EventStore.instance
   }
 
-  private createCurrentPositionId({ chainId, blockNumber, transactionHash }: { chainId: Chain['id']; blockNumber: number; transactionHash: string }): CurrentPositionKey {
-    return `${chainId}-${blockNumber}-${transactionHash}`
-  }
+  async getCurrentPositionSnapshot({ event, context }: { event: EventWithPositionId, context: handlerContext }) {
+    const result = this.currentPositionSnapshot[createStoreKey(event)]
+    if (!result) {
+      await this.cleanup(event.chainId, event.block.number, context)
+      try {
+        const position = await getPosition({ chainId: event.chainId, positionId: event.params.positionId, context })
+        const pair = await getPairForPositionId({ chainId: event.chainId, positionId: event.params.positionId, context })
+        const lots = await loadLots({ position, context })
+        const snapshot: PositionSnapshot = { position, ...pair, lots, event }
+        this.currentPositionSnapshot[createStoreKey(event)] = snapshot
 
-  // call this whenever processing an event that has the position id as a parameter
-  setCurrentPosition({ position, lots, blockNumber, transactionHash }: { lots: { longLots: Lot[], shortLots: Lot[] }; position: Position; blockNumber: number; transactionHash: string }) {
-    const key = this.createCurrentPositionId({ chainId: position.chainId, blockNumber, transactionHash })
-    this.currentPosition[key] = { position, lots }
-    
-    // Cleanup old positions when setting new ones
-    this.cleanupCurrentPositions(position.chainId, blockNumber)
-  }
-
-  // we use this to get the current position that's being processed when we're processing an event that doesn't have the position id as a parameter
-  getCurrentPosition({ chainId, blockNumber, transactionHash }: { chainId: Chain['id'], blockNumber: number; transactionHash: string }) {
-    const result = this.currentPosition[this.createCurrentPositionId({ chainId, blockNumber, transactionHash })]
-    if (!result) return null
+        return snapshot
+      } catch (e) {
+        console.error('error getting position snapshot: ', e)
+        return null
+      }
+    }
     return result
   }
 
-  addLog({ eventId, contangoEvent }: {
-    eventId: EventId
+  async setPositionSnapshot(snapshot: PositionSnapshot) {
+    this.currentPositionSnapshot[createStoreKey(snapshot.event)] = snapshot
+  }
+
+  deletePositionSnapshot(event: GenericEvent) {
+    delete this.currentPositionSnapshot[createStoreKey(event)]
+  }
+
+  addLog({ event, contangoEvent }: {
+    event: GenericEvent
     contangoEvent: ContangoEvents
   }): void {
-    const key = eventIdToStoreKey(eventId)
+    const key = createStoreKey({ chainId: contangoEvent.chainId, block: { number: event.block.number }, transaction: { hash: event.transaction.hash } })
     
     if (!this.store[key]) {
       this.store[key] = []
@@ -67,69 +79,33 @@ class EventStore {
     this.store[key].push(contangoEvent)
   }
 
-  getEvents({ chainId, blockNumber, transactionHash, cleanup = false }: { chainId: number; blockNumber: number; transactionHash: string; cleanup?: boolean }) {
-    const key = createStoreKey({ chainId, blockNumber, transactionHash })
+  getContangoEvents(event: GenericEvent) {
+    const key = createStoreKey(event)
     const events = this.store[key] || []
-    
-    // Always cleanup the events after retrieving them
-    delete this.store[key]
-    
+
     return events
   }
 
-  storeEvents(key: StoreKey, events: ContangoEvents[]) {
-    this.store[key] = events
-  }
-
-  processEvents<T extends ContangoEvents>(
-    key: StoreKey, 
-    predicate: (event: ContangoEvents) => event is T
-  ): T[] {
-    const events = this.store[key] || []
-    const [matching, remaining] = events.reduce<[T[], ContangoEvents[]]>(
-      (acc, event) => {
-        if (predicate(event)) {
-          acc[0].push(event)
-        } else {
-          acc[1].push(event)
-        }
-        return acc
-      },
-      [[], []]
-    )
-    
-    // Store the remaining events back
-    this.storeEvents(key, remaining)
-    
-    return matching
-  }
-
-  private cleanupCurrentPositions(chainId: number, currentBlock: number) {
-    for (const key of Object.keys(this.currentPosition)) {
-      const [storedChainId, blockNumber] = key.split('-').map(Number)
-      if (storedChainId === chainId && blockNumber < currentBlock - EventStore.MAX_BLOCK_AGE) {
-        delete this.currentPosition[key as CurrentPositionKey]
-      }
-    }
-  }
-
-  cleanup(cleanupChainId: number, currentBlock: number) {
-    // Cleanup both stores
-    this.cleanupCurrentPositions(cleanupChainId, currentBlock)
-    
+  async cleanup(cleanupChainId: number, currentBlock: number, context: handlerContext) {
     const keysToDelete: StoreKey[] = []
     for (const key of recordKeys(this.store)) {
       const { chainId, blockNumber } = decodeStoreKey(key)
       if (chainId !== cleanupChainId) continue
       
       // More aggressive cleanup - remove events from completed transactions
-      if (blockNumber < currentBlock - 1) {
+      if (blockNumber < currentBlock) {
         keysToDelete.push(key)
       }
     }
     
     // Batch delete to improve performance
-    keysToDelete.forEach(key => delete this.store[key])
+    for (const key of keysToDelete) {
+      const snapshot = this.currentPositionSnapshot[key]
+      if (!snapshot) continue
+      await eventsReducer({ context, ...snapshot })
+      delete this.currentPositionSnapshot[key]
+      delete this.store[key]
+    }
   }
 }
 

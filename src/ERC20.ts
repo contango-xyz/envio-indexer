@@ -1,23 +1,24 @@
 import { ERC20, ERC20_Transfer_event, WETH } from "generated";
-import { eventsReducer } from "./accounting/processEvents";
 import { eventStore } from "./Store";
-import { createEventId } from "./utils/ids";
 import { EventType } from "./utils/types";
+import { zeroAddress } from "viem";
 
 export const vaultProxy = "0x3f37c7d8e61c000085aac0515775b06a3412f36b"
 export const contangoProxy = "0x6cae28b3d09d8f8fc74ccd496ac986fc84c0c24e"
-export const TRADER = '0x0000000000000000000000000000000000000001'
 
-ERC20.Transfer.handler(async ({ event, context }) => {
-  const eventId = createEventId({ eventType: EventType.TRANSFER, chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex })
-  eventStore.addLog({ eventId, contangoEvent: { ...event, eventType: EventType.TRANSFER } })
+ERC20.Transfer.handler(async ({ event }) => {
+  const [from, to] = [event.params.from, event.params.to].map(a => a.toLowerCase())
+  const fromProxy = from === vaultProxy && to !== zeroAddress
+  const toProxy = to === vaultProxy && from !== zeroAddress
+  if (fromProxy || toProxy) {
+    eventStore.addLog({ event, contangoEvent: { ...event, eventType: EventType.TRANSFER } })
+  }
 },
 {
   wildcard: true,
   eventFilters: [
     { to: vaultProxy },
     { from: vaultProxy },
-    { from: vaultProxy, to: contangoProxy }
   ]
 })
 
@@ -26,14 +27,13 @@ WETH.Deposit.handler(async ({ event }) => {
   const erc20Event: ERC20_Transfer_event = {
     ...event,
     params: {
-      from: TRADER,
+      from: zeroAddress, // use zeroAddress to signify trader
       to: event.params.dst,
       value: event.params.wad
     }
   }
 
-  const eventId = createEventId({ eventType: EventType.TRANSFER, chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex })
-  eventStore.addLog({ eventId, contangoEvent: { ...erc20Event, eventType: EventType.TRANSFER } })
+  eventStore.addLog({ event, contangoEvent: { ...erc20Event, eventType: EventType.TRANSFER } })
 },
 {
   wildcard: true,
@@ -42,36 +42,18 @@ WETH.Deposit.handler(async ({ event }) => {
   ]
 })
 
-WETH.Withdrawal.handler(async ({ event, context }) => {
+WETH.Withdrawal.handler(async ({ event }) => {
   if (!event.transaction.from) throw new Error('No from address on transaction')
   const erc20Event: ERC20_Transfer_event = {
     ...event,
     params: {
       from: event.params.src,
-      to: TRADER,
+      to: zeroAddress, // use zeroAddress to signify trader
       value: event.params.wad
     }
   }
 
-  const eventId = createEventId({ eventType: EventType.TRANSFER, chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex })
-  eventStore.addLog({ eventId, contangoEvent: { ...erc20Event, eventType: EventType.TRANSFER } })
-
-  const positionAndLots = eventStore.getCurrentPosition({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash })
-  if (positionAndLots) {
-    await eventsReducer(
-      {
-        ...event,
-        blockNumber: event.block.number,
-        transactionHash: event.transaction.hash,
-        blockTimestamp: event.block.timestamp,
-        positionId: positionAndLots.position.positionId,
-      },
-      context
-    )
-  }
-  
-  // Cleanup events after processing
-  eventStore.cleanup(event.chainId, event.block.number + 1)
+  eventStore.addLog({ event, contangoEvent: { ...erc20Event, eventType: EventType.TRANSFER } })
 },
 {
   wildcard: true,

@@ -1,46 +1,40 @@
-import { FillItem, Lot, Position, handlerContext } from "generated";
+import { genericEvent } from "envio/src/Internal.gen";
+import { FillItem, Lot, Position, handlerContext } from 'generated';
 import { createIdForLot } from "../utils/ids";
 import { max, mulDiv } from "../utils/math-helpers";
-import { Mutable, ReturnPromiseType } from "../utils/types";
+import { Mutable } from "../utils/types";
 
 export enum AccountingType {
   Long = 'Long',
   Short = 'Short'
 }
 
-export type GenericEvent = {
-  chainId: number
-  blockNumber: number
-  transactionHash: string
-  blockTimestamp: number
-  logIndex: number
-}
+export type GenericEvent = genericEvent<{}, { number: number; timestamp: number }, { hash: string }>
+export type EventWithPositionId = genericEvent<{ positionId: string }, { number: number; timestamp: number }, { hash: string }>
 
-export const initialiseLot = ({ event, position, accountingType, size, fillItem }: { fillItem: Mutable<Pick<FillItem, 'realisedPnl_short' | 'realisedPnl_long' | 'cashflowBase'>>; size: bigint; accountingType: AccountingType; event: GenericEvent; position: Position; }) => {
-  const { chainId, blockNumber, transactionHash, blockTimestamp } = event
-  const id = createIdForLot({ chainId, positionId: position.positionId, blockNumber, accountingType })
+export const initialiseLot = ({ event, position, accountingType, size, cost }: { size: bigint; cost: bigint; accountingType: AccountingType; event: GenericEvent; position: Position; }) => {
+  const { chainId, block: { number: blockNumber }, transaction: { hash: transactionHash }, block: { timestamp: blockTimestamp } } = event
 
   const lot: Lot ={
-    id,
+    id: 'unknown', // a lot should never be saved with an unknown id!
     chainId,
-    positionId: position.positionId,
+    contangoPositionId: position.contangoPositionId,
     createdAtBlock: blockNumber,
     closedAtBlock: undefined,
     createdAtTimestamp: blockTimestamp,
     createdAtTransactionHash: transactionHash,
     accountingType,
 
-    cashflowInCollateralToken: fillItem.cashflowBase,
+    cashflowInCollateralToken: 0n,
 
     size,
     grossSize: size,
 
-    openCost: 0n,
-    grossOpenCost: 0n,
+    openCost: cost,
+    grossOpenCost: cost,
 
-    owner: position.owner,
-
-    nextLotId: undefined
+    position_id: position.id,
+    instrument_id: position.instrument_id,
   }
 
   return lot
@@ -48,6 +42,7 @@ export const initialiseLot = ({ event, position, accountingType, size, fillItem 
 
 
 export const allocateFundingCostToLots = async ({ lots, fundingCostToSettle }: { lots: Lot[]; fundingCostToSettle: bigint }) => {
+  if (fundingCostToSettle === 0n) return lots
 
   let remainingFundingCost = fundingCostToSettle
   const aggregateOpenCost = lots.reduce((acc, lot) => acc + lot.openCost, 0n)
@@ -59,7 +54,7 @@ export const allocateFundingCostToLots = async ({ lots, fundingCostToSettle }: {
     remainingFundingCost -= shareOfFundingCost
     return {
       ...lot,
-      openCost: lot.openCost + shareOfFundingCost
+      openCost: lot.openCost - shareOfFundingCost
     }
   })
 
@@ -67,6 +62,7 @@ export const allocateFundingCostToLots = async ({ lots, fundingCostToSettle }: {
 }
 
 export const allocateFundingProfitToLots = async ({ lots, fundingProfitToSettle }: { lots: Lot[]; fundingProfitToSettle: bigint }) => {
+  if (fundingProfitToSettle === 0n) return lots
 
   let remainingFundingProfit = fundingProfitToSettle
   const aggregateSize = lots.reduce((acc, lot) => acc + lot.size, 0n)
@@ -86,7 +82,7 @@ export const allocateFundingProfitToLots = async ({ lots, fundingProfitToSettle 
 
 }
 
-export const handleSizeDelta = ({
+export const handleCloseSize = ({
   position,
   fillItem,
   lots,
@@ -101,49 +97,39 @@ export const handleSizeDelta = ({
   sizeDelta: bigint;
 }) => {
 
-  if (sizeDelta > 0n) {
-    return [...lots, initialiseLot({ size: sizeDelta, fillItem, accountingType, event: event, position })]
-  } else if (sizeDelta < 0n) {
-    // realise pnl for the lots that are being closed
-    let remainingSizeDelta = sizeDelta
-    return lots.map((lot) => {
-      if (remainingSizeDelta > 0n) return lot
-      const newLot = { ...lot }
-      const closedSize = max(-lot.size, remainingSizeDelta)
+  // realise pnl for the lots that are being closed
+  let remainingSizeDelta = sizeDelta
+  return lots.map((lot) => {
+    if (remainingSizeDelta === 0n) return lot
+    const newLot = { ...lot }
+    const closedSize = max(-lot.size, remainingSizeDelta)
+    const grossClosedSize = mulDiv(closedSize, lot.grossSize, lot.size)
 
-      const grossClosedSize = mulDiv(closedSize, lot.grossSize, lot.size)
+    newLot.size += closedSize
+    newLot.grossSize += grossClosedSize
+    remainingSizeDelta -= closedSize
 
-      newLot.size += closedSize
-      newLot.grossSize += grossClosedSize
-      remainingSizeDelta -= closedSize
+    const closedCost = mulDiv(lot.openCost, closedSize, lot.size)
+    const grossClosedCost = mulDiv(lot.grossOpenCost, grossClosedSize, lot.grossSize)
 
-      const closedCost = mulDiv(lot.openCost, closedSize, lot.size)
-      const grossClosedCost = mulDiv(lot.grossOpenCost, grossClosedSize, lot.grossSize)
+    newLot.openCost += closedCost
+    newLot.grossOpenCost += grossClosedCost
 
-      newLot.openCost += closedCost
-      newLot.grossOpenCost += grossClosedCost
+    if (accountingType === AccountingType.Long) {
+      fillItem.realisedPnl_long -= closedCost
+    } else {
+      fillItem.realisedPnl_short -= closedCost
+    }
 
-      // pretend like this we're closing this amount, and getting 0 units out of the tx, meaning it's a 100% loss
-      // this will be adjusted when processing cashflow/debtDelta so the end result is correct
-      if (accountingType === AccountingType.Long) {
-        fillItem.realisedPnl_long += closedCost
-      } else {
-        const closedCashflow = mulDiv(closedSize, newLot.cashflowInCollateralToken, lot.size)
-        newLot.cashflowInCollateralToken += closedCashflow
-        fillItem.realisedPnl_short += closedCost - closedCashflow
-      }
+    if (closedSize === -lot.size) {
+      newLot.closedAtBlock = event.block.number
+    }
 
-      if (closedSize === -lot.size) {
-        newLot.closedAtBlock = event.blockNumber
-      }
-
-      return newLot
-    })
-  } else return lots
+    return newLot
+  })
 }
 
 export const handleCostDelta = ({ lots, fillItem, costDelta, accountingType }: { fillItem: Mutable<Pick<FillItem, 'realisedPnl_short' | 'realisedPnl_long' | 'cashflowBase'>>; lots: Mutable<Lot>[]; costDelta: bigint; accountingType: AccountingType }) => {
-  // MUTATES THE LOTS AND POSITION
   if (costDelta > 0n) {
     const unchangedLots = lots.slice(0, lots.length - 1)
     const lastLot = lots[lots.length - 1]
@@ -160,32 +146,24 @@ export const handleCostDelta = ({ lots, fillItem, costDelta, accountingType }: {
   return lots
 }
 
-
 export const loadLots = async ({ position, context }: { position: Position; context: handlerContext }) => {
-  const loadChain = async (firstId: string | undefined) => {
-    const promises: Promise<Lot | undefined>[] = []
-    let currentId = firstId
-    while (currentId && currentId.length > 0) {
-      promises.push(context.Lot.get(currentId))
-      const lot = await context.Lot.get(currentId)
-      if (!lot) break
-      currentId = lot.nextLotId
-    }
-    return Promise.all(promises)
-  }
 
-  const [longLotsPromises, shortLotsPromises] = await Promise.all([
-    loadChain(position.firstLotId_long),
-    loadChain(position.firstLotId_short)
-  ])
+  return (await Promise.all(Array.from({ length: position.lotCount }, async (_, idx) => {
+    return context.Lot.get(createIdForLot({ chainId: position.chainId, positionId: position.contangoPositionId, index: idx }))
+  }))).filter((lot): lot is Lot => Boolean(lot))
 
-  const longLots = longLotsPromises.filter((lot): lot is Lot => lot !== undefined)
-  const shortLots = shortLotsPromises.filter((lot): lot is Lot => lot !== undefined)
-
-  return { longLots, shortLots }
 }
 
-export const saveLots = async ({ lots, context }: { lots: ReturnPromiseType<typeof loadLots>['longLots'] | ReturnPromiseType<typeof loadLots>['shortLots']; context: handlerContext }) => {
+export const savePosition = async ({ position, lots, context }: { position: Position; lots: Lot[]; context: handlerContext }) => {
   // Save all lots in parallel
-  await Promise.all(lots.map(lot => context.Lot.set(lot)))
+  await Promise.all(lots.map((lot, idx) => context.Lot.set({ ...lot, id: createIdForLot({ chainId: lot.chainId, positionId: lot.contangoPositionId, index: idx }) })))
+
+  if (position.lotCount !== lots.length) {
+    if (position.lotCount > lots.length) {
+      for (let i = lots.length; i < position.lotCount; i++) {
+        context.Lot.deleteUnsafe(createIdForLot({ chainId: position.chainId, positionId: position.contangoPositionId, index: i }))
+      }
+    }
+  }
+  context.Position.set({ ...position, lotCount: lots.length })
 }

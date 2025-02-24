@@ -1,9 +1,10 @@
 import { createTokenId } from "../src/utils/getTokenDetails"
 import { createEventId } from "../src/utils/ids"
-import { CollateralEvent, DebtEvent, EventType, FeeCollectedEvent, SwapEvent } from "../src/utils/types"
+import { CollateralEvent, DebtEvent, EventType, FeeCollectedEvent, FillItemType, SwapEvent } from "../src/utils/types"
 import { TransferEvent } from "../src/utils/types"
 import { PartialFillItem } from "../src/accounting/processEvents"
 import { Token } from "generated"
+import { GenericEvent } from "../src/accounting/lotsAccounting"
 
 export const WETH_ADDRESS = '0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f'
 export const wrsETH_ADDRESS = '0xd2671165570f41bbb3b0097893300b6eb6101e6c'
@@ -39,6 +40,7 @@ export const emptyPartialFillItem: PartialFillItem = {
   lendingProfitToSettle: BigInt(0),
   fee: BigInt(0),
   liquidationPenalty: BigInt(0),
+  fillItemType: FillItemType.Trade,
 }
 
 export const maestroProxy = "0xa6a147946FACAc9E0B99824870B36088764f969F"
@@ -70,55 +72,55 @@ export const createTransferEvent = ({ amount, token }: { token: typeof debtToken
   }
 }
 
-export const createSwapEvent = ({ amountIn, amountOut, tokenIn, tokenOut }: { amountIn: bigint, amountOut: bigint, tokenIn: string, tokenOut: string }): SwapEvent => {
+export const createSwapEvent = ({ genericEvent, amountIn, amountOut, tokenIn, tokenOut }: { genericEvent: GenericEvent, amountIn: bigint, amountOut: bigint, tokenIn: string, tokenOut: string }): SwapEvent => {
   return {
-    blockNumber: 18958249300517,
-    blockTimestamp: 18958249300517,
-    id: createEventId({ blockNumber: 18958249300517, eventType: EventType.SWAP_EXECUTED, chainId: 1, transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002', logIndex: 0 }),
+    blockNumber: genericEvent.block.number,
+    blockTimestamp: genericEvent.block.timestamp,
+    id: createEventId({ ...genericEvent, eventType: EventType.SWAP_EXECUTED }),
     eventType: EventType.SWAP_EXECUTED,
     chainId: 1,
     tokenIn_id: createTokenId({ chainId: 1, address: tokenIn }),
     tokenOut_id: createTokenId({ chainId: 1, address: tokenOut }),
     amountIn,
     amountOut,
-    transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002',
+    transactionHash: genericEvent.transaction.hash,
   }
 }
 
-export const createCollateralEvent = (args: Partial<CollateralEvent>): CollateralEvent => {
+export const createCollateralEvent = (genericEvent: GenericEvent, args: Partial<CollateralEvent>): CollateralEvent => {
   return {
     eventType: EventType.COLLATERAL,
     chainId: 1,
     balanceBefore: 0n,
     collateralDelta: 0n,
     asset_id: createTokenId({ chainId: 1, address: '0x0000000000000000000000000000000000000000' }),
-    transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002',
-    blockNumber: 18958249300517,
-    blockTimestamp: 18958249300517,
-    id: createEventId({ blockNumber: 18958249300517, eventType: EventType.COLLATERAL, chainId: 1, transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002', logIndex: 0 }),
-    positionId: '0x1',
+    transactionHash: genericEvent.transaction.hash,
+    blockNumber: genericEvent.block.number,
+    blockTimestamp: genericEvent.block.timestamp,
+    id: createEventId({ ...genericEvent, eventType: EventType.COLLATERAL }),
+    contangoPositionId: '0x1',
     ...args,
   }
 }
 
-export const createDebtEvent = (args: Partial<DebtEvent>): DebtEvent => {
+export const createDebtEvent = (genericEvent: GenericEvent, args: Partial<DebtEvent>): DebtEvent => {
   return {
     eventType: EventType.DEBT,
     chainId: 1,
     balanceBefore: 0n,
     debtDelta: 0n,
-    blockNumber: 18958249300517,
-    blockTimestamp: 18958249300517,
-    id: createEventId({ blockNumber: 18958249300517, eventType: EventType.DEBT, chainId: 1, transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002', logIndex: 0 }),
-    positionId: '0x1',
+    blockNumber: genericEvent.block.number,
+    blockTimestamp: genericEvent.block.timestamp,
+    id: createEventId({ ...genericEvent, eventType: EventType.DEBT }),
+    contangoPositionId: '0x1',
     asset_id: createTokenId({ chainId: 1, address: '0x0000000000000000000000000000000000000000' }),
-    transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002',
+    transactionHash: genericEvent.transaction.hash,
     ...args,
   }
 }
 
 
-export const createFeeCollectedEvent = (args: Partial<FeeCollectedEvent>): FeeCollectedEvent => {
+export const createFeeCollectedEvent = (genericEvent: GenericEvent, args: Partial<FeeCollectedEvent>): FeeCollectedEvent => {
   return {
     eventType: EventType.FEE_COLLECTED,
     chainId: 1,
@@ -127,11 +129,11 @@ export const createFeeCollectedEvent = (args: Partial<FeeCollectedEvent>): FeeCo
     trader: TRADER,
     treasury: '0xFee97c6f9Bce786A08b1252eAc9223057508c760',
     token_id: createTokenId({ chainId: 1, address: '0x0000000000000000000000000000000000000000' }),
-    transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002',
-    blockNumber: 18958249300517,
-    blockTimestamp: 18958249300517,
-    id: createEventId({ blockNumber: 18958249300517, eventType: EventType.FEE_COLLECTED, chainId: 1, transactionHash: '0x7772734554485745544800000000000012ffffffff0000000000000000000002', logIndex: 0 }),
-    positionId: '0x1',
+    transactionHash: genericEvent.transaction.hash,
+    blockNumber: genericEvent.block.number,
+    blockTimestamp: genericEvent.block.timestamp,
+    id: createEventId({ ...genericEvent, eventType: EventType.FEE_COLLECTED }),
+    contangoPositionId: '0x1',
     ...args,
   }
 }

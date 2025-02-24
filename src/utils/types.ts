@@ -1,4 +1,4 @@
-import { ContangoCollateralEvent, ContangoDebtEvent, ContangoFeeCollectedEvent, ContangoLiquidationEvent, ContangoPositionMigratedEvent, ContangoPositionUpsertedEvent, ContangoSwapEvent, ERC20_Transfer_event } from "generated";
+import { ContangoCollateralEvent, ContangoDebtEvent, ContangoFeeCollectedEvent, ContangoLiquidationEvent, ContangoPositionMigratedEvent, ContangoPositionUpsertedEvent, ContangoSwapEvent, ERC20_Transfer_event, UnderlyingPositionFactory_UnderlyingPositionCreated_event } from "generated";
 
 export enum FillType {
   Open = "Open",
@@ -26,6 +26,7 @@ export enum EventType {
   TRANSFER = "TRANSFER",
   MIGRATED = "MIGRATED",
   LIQUIDATION = "LIQUIDATION",
+  UNDERLYING_POSITION_CREATED = "UNDERLYING_POSITION_CREATED",
 }
 
 export type TransferEvent = Exclude<ERC20_Transfer_event, "eventType"> & { eventType: EventType.TRANSFER };
@@ -36,6 +37,7 @@ export type DebtEvent = Exclude<ContangoDebtEvent, "eventType"> & { eventType: E
 export type CollateralEvent = Exclude<ContangoCollateralEvent, "eventType"> & { eventType: EventType.COLLATERAL };
 export type PositionUpsertedEvent = Exclude<ContangoPositionUpsertedEvent, "eventType"> & { eventType: EventType.POSITION_UPSERTED };
 export type LiquidationEvent = Exclude<ContangoLiquidationEvent, "eventType"> & { eventType: EventType.LIQUIDATION };
+export type UnderlyingPositionCreated = Exclude<UnderlyingPositionFactory_UnderlyingPositionCreated_event, "eventType"> & { eventType: EventType.UNDERLYING_POSITION_CREATED };
 
 export type ContangoEvents = 
   | SwapEvent
@@ -45,11 +47,14 @@ export type ContangoEvents =
   | CollateralEvent
   | PositionUpsertedEvent
   | LiquidationEvent
-  | TransferEvent;
+  | TransferEvent
+  | UnderlyingPositionCreated;
 
 export enum FillItemType {
   Trade = "Trade",
   Liquidation = "Liquidation",
+  MigrationClose = "MigrationClose",
+  MigrationOpen = "MigrationOpen",
 }
 
 export type Mutable<T> = {

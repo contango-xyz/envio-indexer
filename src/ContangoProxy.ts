@@ -1,6 +1,4 @@
 import {
-  ContangoInstrumentCreatedEvent,
-  ContangoPositionUpsertedEvent,
   ContangoProxy,
   Instrument,
   PositionNFT,
@@ -8,116 +6,84 @@ import {
   UnderlyingPositionFactory_UnderlyingPositionCreated
 } from "generated";
 import { Hex, toHex, zeroAddress } from "viem";
+import { createPosition } from "./accounting/positions";
 import { eventStore } from "./Store";
-import { getOrCreateInstrument, getPosition, getPositionSafe, setPosition } from "./utils/common";
+import { createInstrumentId, getPositionSafe } from "./utils/common";
 import { getOrCreateToken } from "./utils/getTokenDetails";
-import { createEventId, createIdForLot, createIdForPosition } from "./utils/ids";
+import { createEventId } from "./utils/ids";
 import { strategyContractsAddresses } from "./utils/previousContractAddresses";
-import { EventType } from "./utils/types";
-import { AccountingType, loadLots } from "./accounting/lotsAccounting";
-import { eventsReducer } from "./accounting/processEvents";
+import { EventType, PositionUpsertedEvent } from "./utils/types";
 
-ContangoProxy.PositionUpserted.handler(async ({ event, context}) => {
-  const eventId = createEventId({ eventType: EventType.POSITION_UPSERTED, chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex })
-  const upsertedEvent: ContangoPositionUpsertedEvent = {
+// re-run
+ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
+  const contangoEvent: PositionUpsertedEvent = {
     ...event.params,
+    contangoPositionId: event.params.positionId,
     blockNumber: event.block.number,
     blockTimestamp: event.block.timestamp,
     chainId: event.chainId,
-    id: eventId,
+    id: createEventId({ ...event, eventType: EventType.POSITION_UPSERTED }),
     transactionHash: event.transaction.hash,
+    eventType: EventType.POSITION_UPSERTED,
   }
+  eventStore.addLog({ event, contangoEvent })
 
-  eventStore.addLog({ eventId, contangoEvent: { ...upsertedEvent, eventType: EventType.POSITION_UPSERTED } })
+  await eventStore.getCurrentPositionSnapshot({ event, context })
 
-  await eventsReducer(
-    {
-      chainId: event.chainId,
-      blockNumber: event.block.number,
-      transactionHash: event.transaction.hash,
-      blockTimestamp: event.block.timestamp,
-      positionId: event.params.positionId,
-      logIndex: event.logIndex,
-    },
-    context
-  )
+  // if (snapshot) {
+  //   // we cannot safely delete the snapshot here yet, because the upserted event may not be the last event in the tx
+  //   await eventsReducer({ ...snapshot, context })
+  // }
 })
 
 // On create, the NFT transfer event is emitted before the UnderlyingPositionCreated event
 PositionNFT.Transfer.handler(async ({ event, context }) => {
-  const { block: { number: blockNumber }, transaction: { hash: transactionHash } } = event
   const positionId = toHex(event.params.tokenId, { size: 32 }).toLowerCase() as Hex
+  const [to, from] = [event.params.to, event.params.from].map(address => address.toLowerCase()) as Hex[]
 
-  const position = await getPositionSafe({ chainId: event.chainId, positionId, context })
-  const to = event.params.to.toLowerCase() as Hex
+  if (event.srcAddress.toLowerCase() !== '0xc2462f03920d47fc5b9e2c5f0ba5d2ded058fd78') return; // bug in envio causing this handler to pick up some scam tsx for example on this tx hash: 0xc1d5865badca9ee1f7d787c1d69f42621dd10a6ac8affad2d8d3d89ce9393ae2
 
-  if (position) {
-
-    const isTransferToStrategyBuilder = strategyContractsAddresses(event.chainId).has(to)
+  if (event.params.from !== zeroAddress) {
     // if the transfer is to the strategy builder, we don't update the owner.
     // This is important because when we evaluate cashflows, we need to know the cashflows of the actual owner and not the "temporary" owner
-    const owner = isTransferToStrategyBuilder ? position.owner : to
-    const isOpen = event.params.to !== zeroAddress // update isOpen when NFT is transferred to the zero address
+    const isTransferToStrategyBuilder = strategyContractsAddresses(event.chainId).has(to)
 
-    let { longLots, shortLots } = await loadLots({ position, context })
-    if (owner !== position.owner) {
-      longLots = longLots.map(lot => ({ ...lot, owner }))
-      shortLots = shortLots.map(lot => ({ ...lot, owner }))
+    const position = await getPositionSafe({ chainId: event.chainId, positionId, context })
+
+    if (position) {
+      const owner = isTransferToStrategyBuilder || to === zeroAddress ? position.owner : to
+      const isOpen = to !== zeroAddress // update isOpen when NFT is transferred to the zero address
+  
+      context.Position.set({ ...position, owner, isOpen })
+    } else {
+      if (!strategyContractsAddresses(event.chainId).has(from)) throw new Error(`Position not found for NFT transfer event. tx hash: ${event.transaction.hash}`)
+      
+      return;
+      // if no position exists yet, it means we're in a migration transaction and it'll be handled by the eventsReducer()
     }
-
-    setPosition({ ...position, owner, isOpen }, { longLots, shortLots }, { blockNumber, transactionHash, context })
-  } else {
-    const instrument = await getOrCreateInstrument({ chainId: event.chainId, positionId: positionId, context })
-    const position = {
-      id: createIdForPosition({ chainId: event.chainId, positionId }),
-      chainId: event.chainId,
-      proxyAddress: zeroAddress, // this will be set in UnderlyingPositonEvent handler
-      positionId,
-      owner: to,
-      isOpen: true,
-      createdAtBlock: event.block.number,
-      createdAtTimestamp: event.block.timestamp,
-      createdAtTransactionHash: event.transaction.hash,
-      instrument_id: instrument.id,
-      collateral: 0n,
-      accruedLendingProfit: 0n,
-      debt: 0n,
-      accruedInterest: 0n,
-      fees_long: 0n,
-      fees_short: 0n,
-      cashflowBase: 0n,
-      cashflowQuote: 0n,
-      firstLotId_long: createIdForLot({ chainId: event.chainId, positionId, blockNumber: event.block.number, accountingType: AccountingType.Long }),
-      firstLotId_short: createIdForLot({ chainId: event.chainId, positionId, blockNumber: event.block.number, accountingType: AccountingType.Short }),
-      realisedPnl_long: 0n,
-      realisedPnl_short: 0n,
-    }
-
-    setPosition(position, { longLots: [], shortLots: [] }, { blockNumber: event.block.number, transactionHash: event.transaction.hash, context })
   }
 });
 
 export const createUnderlyingPositionId = ({ chainId, proxyAddress }: { chainId: number; proxyAddress: string; }) => `${chainId}_${proxyAddress.toLowerCase()}`
 
 UnderlyingPositionFactory.UnderlyingPositionCreated.handler(async ({ event, context }) => {
-  const id = createUnderlyingPositionId({ chainId: event.chainId, proxyAddress: event.params.account })
-  const entity: UnderlyingPositionFactory_UnderlyingPositionCreated = {
-    id,
-    chainId: event.chainId,
-    account: event.params.account,
-    positionId: event.params.positionId,
+  if (!event.transaction.from) throw new Error('UnderlyingPositionCreated event has no from address')
+  const [owner, proxyAddress] = [event.transaction.from, event.params.account].map(address => address.toLowerCase())
+  await createPosition({ ...event, positionId: event.params.positionId, owner, proxyAddress, context })
+
+  const underlyingPosition: UnderlyingPositionFactory_UnderlyingPositionCreated = {
+    id: createUnderlyingPositionId({ chainId: event.chainId, proxyAddress }),
+    contangoPositionId: event.params.positionId,
+    account: event.params.account.toLowerCase(),
     blockNumber: event.block.number,
     blockTimestamp: event.block.timestamp,
+    chainId: event.chainId,
     transactionHash: event.transaction.hash,
-  };
+  }
 
-  context.UnderlyingPositionFactory_UnderlyingPositionCreated.set(entity);
-
-  const position = await getPosition({ chainId: event.chainId, positionId: event.params.positionId, context })
-  setPosition({ ...position, proxyAddress: entity.account }, { longLots: [], shortLots: [] }, { blockNumber: event.block.number, transactionHash: event.transaction.hash, context })
+  context.UnderlyingPositionFactory_UnderlyingPositionCreated.set(underlyingPosition)
 });
 
-export const createInstrumentId = ({ chainId, instrumentId }: { chainId: number; instrumentId: string; }) => `${chainId}_${instrumentId}`
 
 ContangoProxy.InstrumentCreated.handler(async ({ event, context }) => {
   const { chainId, params } = event
@@ -127,7 +93,7 @@ ContangoProxy.InstrumentCreated.handler(async ({ event, context }) => {
   ]);
 
   const instrumentId = event.params.symbol.slice(0, 34)
-  
+
   const entity: Instrument = {
     id: createInstrumentId({ chainId, instrumentId }),
     chainId: event.chainId,
@@ -138,17 +104,13 @@ ContangoProxy.InstrumentCreated.handler(async ({ event, context }) => {
   };
 
   context.Instrument.set(entity);
-
-  const rawEventEntity: ContangoInstrumentCreatedEvent = {
-    id: `${chainId}_${event.block.number}_${event.logIndex}`,
-    chainId: event.chainId,
-    blockNumber: event.block.number,
-    blockTimestamp: event.block.timestamp,
-    transactionHash: event.transaction.hash,
-    symbol: event.params.symbol,
-    base: event.params.base,
-    quote: event.params.quote,
-  };
-
-  context.ContangoInstrumentCreatedEvent.set(rawEventEntity);
 });
+
+
+ContangoProxy.ClosingOnlySet.handler(async ({ event, context }) => {
+  const { chainId, params } = event
+  const instrument = await context.Instrument.get(createInstrumentId({ chainId, instrumentId: params.symbol }))
+  if (!instrument) throw new Error('Instrument not found')
+
+  context.Instrument.set({ ...instrument, closingOnly: event.params.closingOnly })
+})

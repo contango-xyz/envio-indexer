@@ -3,27 +3,36 @@ import {
   SiloLiquidations
 } from "generated";
 import { eventsReducer } from "../accounting/processEvents";
-import { getBalancesAtBlock, getPairForPositionId, getPosition } from "../utils/common";
-import { createLiquidationId } from "../utils/ids";
+import { eventStore } from "../Store";
+import { getBalancesAtBlock, getMarkPrice } from "../utils/common";
+import { createEventId } from "../utils/ids";
 import { max } from "../utils/math-helpers";
-import { getLiquidationPenalty, getMarkPrice, getPositionIdForProxyAddress } from "./common";
+import { EventType } from "../utils/types";
+import { getLiquidationPenalty, getPositionIdForProxyAddress } from "./common";
 
 SiloLiquidations.LiquidateSilo.handler(async ({ event, context }) => {
   const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.user, context })
 
   if (positionId) {
-    const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
-    const position = await getPosition({ chainId: event.chainId, positionId, context })
-    const { debtToken, collateralToken } = await getPairForPositionId({ chainId: event.chainId, positionId, context })
-    const markPrice = await getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
+    const snapshot = await eventStore.getCurrentPositionSnapshot({ event: { ...event, params: { positionId } }, context })
+    if (!snapshot) {
+      console.error(`no snapshot found for positionId: ${positionId} - chainId: ${event.chainId}`, event)
+      return
+    }
+
+    const { position, collateralToken, debtToken } = snapshot
+    const [balancesBefore, markPrice] = await Promise.all([
+      getBalancesAtBlock(event.chainId, positionId, event.block.number - 1),
+      getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
+    ])
 
     const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
     const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
 
     const liquidationEvent: ContangoLiquidationEvent = {
-      id: createLiquidationId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex }),
+      id: createEventId({ ...event, eventType: EventType.LIQUIDATION }),
       chainId: event.chainId,
-      positionId,
+      contangoPositionId: positionId,
       collateralDelta: -event.params.seizedCollateral,
       debtDelta: -event.params.shareAmountRepaid,
       blockNumber: event.block.number,
@@ -32,19 +41,11 @@ SiloLiquidations.LiquidateSilo.handler(async ({ event, context }) => {
       lendingProfitToSettle,
       debtCostToSettle,
       liquidationPenalty: getLiquidationPenalty({ collateralToken, collateralDelta: event.params.seizedCollateral, debtDelta: event.params.shareAmountRepaid, markPrice }),
+      markPrice,
     }
     context.ContangoLiquidationEvent.set(liquidationEvent)
+    eventStore.addLog({ event: { ...event, params: { positionId } }, contangoEvent: { ...liquidationEvent, eventType: EventType.LIQUIDATION } })
 
-    await eventsReducer(
-      {
-        chainId: event.chainId,
-        blockNumber: event.block.number,
-        transactionHash: event.transaction.hash,
-        logIndex: event.logIndex,
-        positionId,
-        blockTimestamp: event.block.timestamp,
-      },
-      context
-    )
+    await eventsReducer({ ...snapshot, context })
   }
 }, { wildcard: true });

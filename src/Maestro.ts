@@ -1,17 +1,18 @@
 import { ContangoFeeCollectedEvent, Maestro } from "generated";
+import { eventsReducer } from "./accounting/processEvents";
 import { eventStore } from "./Store";
 import { getOrCreateToken } from "./utils/getTokenDetails";
 import { createEventId } from "./utils/ids";
 import { EventType } from "./utils/types";
-import { eventsReducer } from "./accounting/processEvents";
 
 Maestro.FeeCollected.handler(async ({ event, context }) => {
+  const snapshot = await eventStore.getCurrentPositionSnapshot({ event, context })
   const token = await getOrCreateToken({ chainId: event.chainId, address: event.params.token, context })
-  const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.FEE_COLLECTED })
+  const eventId = createEventId({ ...event, eventType: EventType.FEE_COLLECTED })
   const entity: ContangoFeeCollectedEvent = {
     id: eventId,
     chainId: event.chainId,
-    positionId: event.params.positionId,
+    contangoPositionId: event.params.positionId,
     trader: event.params.trader,
     treasury: event.params.treasury,
     token_id: token.id,
@@ -23,18 +24,10 @@ Maestro.FeeCollected.handler(async ({ event, context }) => {
   }
 
   context.ContangoFeeCollectedEvent.set(entity)
-  eventStore.addLog({ eventId, contangoEvent: { ...entity, eventType: EventType.FEE_COLLECTED } })
-  
-  // fee might be the last event in the tx
-  await eventsReducer(
-    {
-      chainId: event.chainId,
-      blockNumber: event.block.number,
-      transactionHash: event.transaction.hash,
-      positionId: event.params.positionId,
-      blockTimestamp: event.block.timestamp,
-      logIndex: event.logIndex,
-    },
-    context
-  )
+  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.FEE_COLLECTED } })
+
+  if (snapshot) {
+    // we consider the fee event to be the last event in the tx
+    await eventsReducer({ ...snapshot, context })
+  }
 })

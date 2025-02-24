@@ -1,6 +1,6 @@
 import { ContangoPositionUpsertedEvent, Position, Token } from "generated";
 import { mulDiv } from "../utils/math-helpers";
-import { PartialFillItem } from "./processEvents";
+import { PartialFillItem } from "./helpers";
 
 export enum CashflowCurrency {
   None,
@@ -8,7 +8,7 @@ export enum CashflowCurrency {
   Quote,
 }
 
-export const deriveFillItemValuesFormPositionUpsertedEvent = (
+export const deriveFillItemValuesFromPositionUpsertedEvent = (
   {
     upsertedEvent,
     fillItem,
@@ -23,7 +23,7 @@ export const deriveFillItemValuesFormPositionUpsertedEvent = (
     position: Position;
   }
 ): PartialFillItem => {
-  const { quantityDelta, price, cashflowCcy, cashflow, positionId } = upsertedEvent
+  const { quantityDelta, price, cashflowCcy, cashflow } = upsertedEvent
 
   const newFillItem = { ...fillItem }
 

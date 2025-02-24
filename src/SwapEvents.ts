@@ -21,7 +21,7 @@ SpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
   ])
 
   const { chainId, block: { timestamp: blockTimestamp, number: blockNumber }, transaction: { hash: transactionHash }, logIndex } = event
-  const eventId = createEventId({ chainId, blockNumber, transactionHash, logIndex, eventType: EventType.SWAP_EXECUTED })
+  const eventId = createEventId({ ...event, eventType: EventType.SWAP_EXECUTED })
   const swapEvent: ContangoSwapEvent = {
     id: eventId,
     chainId,
@@ -35,7 +35,7 @@ SpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
   }
 
   context.ContangoSwapEvent.set(swapEvent)
-  eventStore.addLog({ eventId, contangoEvent: { ...swapEvent, eventType: EventType.SWAP_EXECUTED } })
+  eventStore.addLog({ event, contangoEvent: { ...swapEvent, eventType: EventType.SWAP_EXECUTED } })
 }, { wildcard: true })
 
 SimpleSpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
@@ -47,7 +47,7 @@ SimpleSpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
     getOrCreateToken({ chainId: event.chainId, address: event.params.tokenToBuy, context }),
   ])
 
-  const eventId = createEventId({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash, logIndex: event.logIndex, eventType: EventType.SWAP_EXECUTED })
+  const eventId = createEventId({ ...event, eventType: EventType.SWAP_EXECUTED })
 
   const swapEvent: ContangoSwapEvent = {
     id: eventId,
@@ -62,5 +62,5 @@ SimpleSpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
   }
 
   context.ContangoSwapEvent.set(swapEvent)
-  eventStore.addLog({ eventId, contangoEvent: { ...swapEvent, eventType: EventType.SWAP_EXECUTED } })
+  eventStore.addLog({ event, contangoEvent: { ...swapEvent, eventType: EventType.SWAP_EXECUTED } })
 }, { wildcard: true })
