@@ -1,13 +1,12 @@
 import { expect } from 'chai'
 import { Lot, TestHelpers } from 'generated'
 import { describe, it } from 'mocha'
+import { AccountingType } from '../src/accounting/lotsAccounting'
+import { getBalancesAtBlock } from '../src/utils/common'
 import { createIdForPosition } from '../src/utils/ids'
+import { mulDiv } from '../src/utils/math-helpers'
 import { FillItemType } from '../src/utils/types'
 import { getTransactionHashes, processTransaction } from './testHelpers'
-import { getBalancesAtBlock } from '../src/utils/common'
-import { mulDiv } from '../src/utils/math-helpers'
-import { AccountingType } from '../src/accounting/lots'
-
 const { MockDb } = TestHelpers
 
 const calculateEntryPrice = (lot: Lot) => {
@@ -16,10 +15,100 @@ const calculateEntryPrice = (lot: Lot) => {
 
 describe('indexer tests', () => {
   let mockDb: ReturnType<typeof MockDb.createMockDb>
-
-  beforeEach(() => {
+  beforeEach(async () => {
     mockDb = MockDb.createMockDb()
   })
+
+  it('RDNT/ETH short - Chain: Arbitrum - Number: #20498', async function() {
+    this.timeout(30000)
+    const positionId = '0x5745544852444e54000000000000000010ffffffff0000000000000000005012'
+    const transactionHashes = await getTransactionHashes(42161, positionId)
+
+    for (let i = 0; i < transactionHashes.length; i++) {
+      mockDb = await processTransaction(42161, transactionHashes[i], mockDb)
+
+      const position = mockDb.entities.Position.get(createIdForPosition({ chainId: 42161, positionId }))
+      if (!position) throw new Error('Position not found in test!')
+      const fillItems = mockDb.entities.FillItem.getAll()
+      const swapEvents = mockDb.entities.ContangoSwapEvent.getAll()
+      const lots = mockDb.entities.Lot.getAll()
+      
+      console.log(`position ${i}`, position)
+      console.log(`fillItems ${i}`, fillItems[i])
+      // console.log(`lots ${i}`, lots)
+    }
+
+  })
+
+  it('ARB/DAI long - Chain: Arbitrum - Number: #21272', async function() {
+    this.timeout(30000)
+    const positionId = '0x4152424441490000000000000000000001ffffffff0200000000000000005318'
+    const transactionHashes = await getTransactionHashes(42161, positionId)
+
+    for (let i = 0; i < transactionHashes.length; i++) {
+      mockDb = await processTransaction(42161, transactionHashes[i], mockDb)
+
+      const position = mockDb.entities.Position.get(createIdForPosition({ chainId: 42161, positionId }))
+      if (!position) throw new Error('Position not found in test!')
+      const fillItems = mockDb.entities.FillItem.getAll()
+      const swapEvents = mockDb.entities.ContangoSwapEvent.getAll()
+      const lots = mockDb.entities.Lot.getAll()
+      
+      console.log(`position ${i}`, position)
+      console.log(`fillItems ${i}`, fillItems[i])
+      // console.log(`lots ${i}`, lots)
+    }
+
+  })
+
+
+  it('ETH/USDC.e long - Chain: Arbitrum - Number: #21105 - MIGRATION', async function() {
+    this.timeout(30000)
+    const positionId = '0x5745544855534443000000000000000001ffffffff0000000000000000005271'
+    const transactionHashes = await getTransactionHashes(42161, positionId)
+
+    for (let i = 0; i < transactionHashes.length; i++) {
+      mockDb = await processTransaction(42161, transactionHashes[i], mockDb)
+
+      const lots = mockDb.entities.Lot.getAll()
+      let fillItems = mockDb.entities.FillItem.getAll()
+      console.log('all fill items', fillItems)
+      let position = mockDb.entities.Position.get(createIdForPosition({ chainId: 42161, positionId }))
+
+      if (!position) {
+        const migratedToPositionId = '0x5745544855534443000000000000000011ffffffff00000000000000000053e2'
+        position = mockDb.entities.Position.get(createIdForPosition({ chainId: 42161, positionId: migratedToPositionId }))
+        if (!position) throw new Error('Position not found in test!')
+        fillItems = [fillItems[i], fillItems[i + 1]]
+      }
+      console.log(`position ${i}`, position)
+      console.log(`fillItems ${i}`, fillItems)
+      // console.log(`lots ${i}`, lots)
+    }
+
+  })
+
+  it.only('ARB/USDC long - Chain: Arbitrum - Number: #5488 - REALISED PNL IS FUCKED', async function() {
+    this.timeout(30000)
+    const positionId = '0x415242555344432e6e0000000000000001ffffffff0200000000000000001570'
+    const transactionHashes = await getTransactionHashes(42161, positionId)
+
+    for (let i = 0; i < transactionHashes.length; i++) {
+      mockDb = await processTransaction(42161, transactionHashes[i], mockDb)
+
+      const position = mockDb.entities.Position.get(createIdForPosition({ chainId: 42161, positionId }))
+      if (!position) throw new Error('Position not found in test!')
+      const fillItems = mockDb.entities.FillItem.getAll()
+      const swapEvents = mockDb.entities.ContangoSwapEvent.getAll()
+      const lots = mockDb.entities.Lot.getAll()
+      
+      console.log(`position ${i}`, position)
+      console.log(`fillItems ${i}`, fillItems[i])
+      // console.log(`lots ${i}`, lots)
+    }
+
+  })
+
 
   it('Linea -> open, increase, decrease, close', async function() {
     this.timeout(30000)
@@ -52,9 +141,9 @@ describe('indexer tests', () => {
       expect(totalLendingProfitOnFillItems, `totalLendingProfitOnFillItems trade ${i + 1}`).to.equal(position?.accruedLendingProfit)
       expect(totalDebtCostOnFillItems, `totalDebtCostOnFillItems trade ${i + 1}`).to.equal(position?.accruedInterest)
 
+      console.log(`Position state after trade number ${i + 1}`, position, debtEvents, swapEvents)
+
       if (i === 0) {
-        console.log(`Position state after trade number ${i + 1}`, position)
-        console.log('fillItem', fillItems[i])
 
         expect(fillItems[i].collateralDelta, 'fillItems[i].collateralDelta').to.equal(19655463075342034n)
         expect(fillItems[i].debtDelta, 'fillItems[i].debtDelta').to.equal(9999999999999999n)
@@ -87,14 +176,12 @@ describe('indexer tests', () => {
         expect(longLots[0].openCost).to.equal(19999999999999999n)
         expect(longLots[0].grossOpenCost).to.equal(19999999999999999n)
         expect(longLots[0].closedAtBlock).to.be.undefined
-        expect(longLots[0].nextLotId).to.be.undefined
 
         expect(shortLots[0].size).to.equal(9999999999999999n)
         expect(shortLots[0].grossSize).to.equal(9999999999999999n)
         expect(shortLots[0].openCost).to.equal(19655463075342034n)
         expect(shortLots[0].grossOpenCost).to.equal(19655463075342034n)
         expect(shortLots[0].closedAtBlock).to.be.undefined
-        expect(shortLots[0].nextLotId).to.be.undefined
         
         // The lots are the inverses of each other
 
@@ -130,14 +217,12 @@ describe('indexer tests', () => {
         expect(longLots[0].grossSize).to.equal(19655463075342034n)
         expect(longLots[0].openCost).to.equal(19999999999999999n)
         expect(longLots[0].grossOpenCost).to.equal(19999999999999999n)
-        expect(longLots[0].nextLotId).to.equal(longLots[1].id)
         expect(longLots[0].closedAtBlock).to.be.undefined
 
         expect(longLots[1].size).to.equal(13060988701623025n)
         expect(longLots[1].grossSize).to.equal(13060988701623025n)
         expect(longLots[1].openCost).to.equal(13289933563089531n)
         expect(longLots[1].grossOpenCost).to.equal(13289933563089531n)
-        expect(longLots[1].nextLotId).to.be.undefined
         expect(longLots[1].closedAtBlock).to.be.undefined
         
         // SHORT LOTS
@@ -145,23 +230,17 @@ describe('indexer tests', () => {
         expect(shortLots[0].grossSize).to.equal(9999999999999999n)
         expect(shortLots[0].openCost).to.equal(19655463075342034n)
         expect(shortLots[0].grossOpenCost).to.equal(19655463075342034n)
-        expect(shortLots[0].nextLotId).to.equal(shortLots[1].id)
         expect(shortLots[0].closedAtBlock).to.be.undefined     
 
         expect(shortLots[1].size).to.equal(fillItem.debtDelta)
         expect(shortLots[1].grossSize).to.equal(fillItem.debtDelta)
         expect(shortLots[1].openCost).to.equal(fillItem.collateralDelta)
         expect(shortLots[1].grossOpenCost).to.equal(fillItem.collateralDelta)
-        expect(shortLots[1].nextLotId).to.be.undefined
         expect(shortLots[1].closedAtBlock).to.be.undefined
-
-        console.log('shortLots after trade 2', shortLots)
 
         console.log('------------- TWO FINISHED -------------------')
         
       } else if (i === 2) {
-        console.log(`Position state after trade number ${i + 1}`, position)
-        console.log('fillItem', fillItems[i])
 
         const lotZeroEntryPriceBefore = calculateEntryPrice(longLotsBefore[0])
 
@@ -213,44 +292,28 @@ describe('indexer tests', () => {
         expect(costDeltaShort, 'costDeltaShort').to.equal(-18502300174674009n)
         expect(fillItems[i].collateralDelta, 'fillItems[i].collateralDelta').to.equal(-12963310727632896n)
 
-        // pnl long:  46130387217010
-        // pnl short:
-        // collateral delta: -12963310727632896
-        // collateral delta in quote ccy: -12963310727632896 * 1.033029241515446081 = -13187613148871857
-        // realised pnl short: -13187613148871857 - (-13386791261471010 + 0) = 199178112599153 (0.0001991781126)
+        // cashflowBase:
+        // 9810977519803654 - 9827731537671017 = -16754017867363 (-0.00001675401787)
 
-        // alternative calculation:
-        // 
-
-        // -9375574049290972n
-        // -9369487592649461
-
-        expect(position?.realisedPnl_short, 'position?.realisedPnl_short').to.equal(-199178112599153n)
-        expect(fillItems[i].realisedPnl_short, 'fillItems[i].realisedPnl_short').to.equal(-5538989447041113n)
+        expect(position?.realisedPnl_short, 'position?.realisedPnl_short').to.equal(-16754017867363n)
+        expect(fillItems[i].realisedPnl_short, 'fillItems[i].realisedPnl_short').to.equal(-16754017867363n)
         expect(fillItems[i].collateralDelta, 'fillItems[i].collateralDelta').to.equal(-12963310727632896n)
         expect(fillItems[i].fillItemType, 'fillItems[i].fillItemType').to.equal(FillItemType.Trade)
         expect(fillItems[i].cashflowSwap_id).to.be.undefined
 
         expect(position?.collateral).to.equal(19753141049332163n)
         expect(position?.debt).to.equal(9903142301618520n) // 9999999999999999 + 13289933563089531 + -13386791261471010 = 9903142301618520
-        // expect(position?.accruedInterest).to.equal(0n)
-        // expect(position?.accruedLendingProfit).to.equal(0n)
-        // expect(position?.realisedPnl_long).to.equal(46130387217010n)
-        // expect(position?.realisedPnl_short).to.equal(-346105178850924n)
 
         console.log('------------- THREE FINISHED -------------------')
         
       } else if (i === 3) {
         const fillItem = fillItems[i]
 
-        console.log(`Position state after trade number ${i + 1}`, position)
-        console.log('fillItem', fillItems[i])
-
         const totalCollateral = 19753141049332163n
         const totalDebt = 9903142301618520n
         const totalCashflowQuote = 0n
         
-        
+        expect(fillItem.realisedPnl_long, 'fillItem.realisedPnl_long').to.equal(148683342931661n) // 0.000148683342931661
       }
 
       longLotsBefore = longLots

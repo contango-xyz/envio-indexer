@@ -1,9 +1,10 @@
 import { Lot, TestHelpers } from 'generated'
 import { decodeEventLog, erc20Abi, getAbiItem, Hex, Log, parseAbi, toEventSelector } from 'viem'
-import { contangoAbi, iMoneyMarketAbi, positionNftAbi, simpleSpotExecutorAbi, spotExecutorAbi, strategyBuilderAbi, underlyingPositionFactoryAbi } from '../src/abis'
+import { contangoAbi, iMoneyMarketAbi, maestroAbi, positionNftAbi, simpleSpotExecutorAbi, spotExecutorAbi, strategyBuilderAbi, underlyingPositionFactoryAbi } from '../src/abis'
 import { clients } from '../src/clients'
 import fs from 'fs/promises'
 import path from 'path'
+import { eventStore } from '../src/Store'
 
 const {
   ContangoProxy,
@@ -14,6 +15,8 @@ const {
   UnderlyingPositionFactory,
   MockDb,
   WETH,
+  StrategyProxy,
+  Maestro,
 } = TestHelpers
 
 const wethAbi = parseAbi([
@@ -53,13 +56,16 @@ const abiItems = {
   'UnderlyingPositionFactory': {
     'UnderlyingPositionCreated': getAbiItem({ abi: underlyingPositionFactoryAbi, name: "UnderlyingPositionCreated" }),
   },
+  'Maestro': {
+    'FeeCollected': getAbiItem({ abi: maestroAbi, name: "FeeCollected" }),
+  }
 }
 
 const getEventSelectors = (contract: keyof typeof abiItems) => {
   return Object.values(abiItems[contract]).map(toEventSelector)
 }
 
-const logToEvent = (log: Log, from: Hex, chainId: number) => {
+const logToEvent = ({ log, from, to, chainId }: { log: Log; from: Hex; to: Hex; chainId: number }) => {
   const data = log.data === "0x" ? undefined : log.data as Hex
       const topics = log.topics as [Hex, ...Hex[]]
       try {
@@ -84,6 +90,8 @@ const logToEvent = (log: Log, from: Hex, chainId: number) => {
 
           if (getEventSelectors('UnderlyingPositionFactory').includes(topics[0])) return underlyingPositionFactoryAbi
 
+          if (getEventSelectors('Maestro').includes(topics[0])) return maestroAbi
+
           return null
         })()
         if (!abi) return null
@@ -94,11 +102,12 @@ const logToEvent = (log: Log, from: Hex, chainId: number) => {
           transaction: {
             hash: log.transactionHash as Hex,
             from,
+            to,
           },
           logIndex: Number(log.logIndex),
           block: {
             number: Number(log.blockNumber || 0),
-            timestamp: Date.now(), // don't use timestamp for anything in indexing 
+            timestamp: Math.floor(Date.now() / 1000), // don't use timestamp for anything in indexing 
             hash: log.blockHash as Hex,
           },
           chainId,
@@ -131,7 +140,7 @@ const reviver = (_key: string, value: any) => {
   return value
 }
 
-const getTransactionLogs = async (chainId: number, transactionHash: string): Promise<{ logs: Log[], from: Hex }> => {
+const getTransactionLogs = async (chainId: number, transactionHash: string): Promise<{ logs: Log[]; from: Hex; to: Hex }> => {
   const cacheKey = getCacheKey(chainId, transactionHash)
   
   try {
@@ -139,23 +148,47 @@ const getTransactionLogs = async (chainId: number, transactionHash: string): Pro
     return JSON.parse(cached, reviver)
   } catch (e) {
     // Cache miss, fetch from chain
-    const { logs, from } = await clients[chainId].getTransactionReceipt({ hash: transactionHash as Hex })
+    const { logs, from, to } = await clients[chainId].getTransactionReceipt({ hash: transactionHash as Hex })
+
+    if (!to) throw new Error(`Transaction ${transactionHash} "to" property not found`)
     
     // Ensure cache directory exists
     await fs.mkdir(getCacheDir(), { recursive: true })
     
     // Save to cache
-    await fs.writeFile(cacheKey, JSON.stringify({ logs, from }, replacer, 2))
+    await fs.writeFile(cacheKey, JSON.stringify({ logs, from, to }, replacer, 2))
     
-    return { logs, from }
+    return { logs, from, to }
   }
 }
 
+const runProcessing = async ({ mockDb, positionId, chainId, transactionHash, blockNumber }: { mockDb: ReturnType<typeof MockDb.createMockDb>; positionId: Hex; chainId: number; transactionHash: string; blockNumber: number }) => {
+  const mockEvent = StrategyProxy.EndStrategy.createMockEvent({
+    positionId,
+    mockEventData: {
+      chainId,
+      transaction: {
+        hash: transactionHash,
+      },
+      block: {
+        number: blockNumber,
+      }
+    }
+  })
+
+  return await StrategyProxy.EndStrategy.processEvent({
+    event: mockEvent,
+    mockDb,
+  })
+}
+
 export const processTransaction = async (chainId: number, transactionHash: string, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
-  const { logs, from } = await getTransactionLogs(chainId, transactionHash)
+  const { logs, from, to } = await getTransactionLogs(chainId, transactionHash)
+
+  let positionId: Hex | undefined
 
   for (const log of logs) {
-    const event = logToEvent(log, from, chainId)
+    const event = logToEvent({ log, from, to, chainId })
     if (!event) continue
 
     switch (event.eventName) {
@@ -188,6 +221,7 @@ export const processTransaction = async (chainId: number, transactionHash: strin
         break
       }
       case 'PositionUpserted': {
+        positionId = event.args.positionId
         mockDb = await ContangoProxy.PositionUpserted.processEvent({
           event: {
             ...event,
@@ -197,6 +231,16 @@ export const processTransaction = async (chainId: number, transactionHash: strin
               feeCcy: BigInt(event.args.feeCcy),
             },
           },
+          mockDb
+        })
+        break
+      }
+      case 'FeeCollected': {
+        mockDb = await Maestro.FeeCollected.processEvent({
+          event: { ...event, params: {
+            ...event.args,
+            basisPoints: BigInt(event.args.basisPoints),
+          } },
           mockDb
         })
         break
@@ -239,7 +283,31 @@ export const processTransaction = async (chainId: number, transactionHash: strin
         break
       }
       case 'UnderlyingPositionCreated': {
-        mockDb = await UnderlyingPositionFactory.UnderlyingPositionCreated.processEvent({
+        try {
+          const mockEvent = UnderlyingPositionFactory.UnderlyingPositionCreated.createMockEvent({
+            ...event.args,
+            mockEventData: {
+              ...event,
+            }
+          })
+          mockDb = await UnderlyingPositionFactory.UnderlyingPositionCreated.processEvent({
+            event: mockEvent,
+            mockDb
+          })
+        } catch (e) {
+          console.error(e)
+        }
+        break
+      }
+      case 'StragegyExecuted': {
+        mockDb = await StrategyProxy.StragegyExecuted.processEvent({
+          event: { ...event, params: event.args },
+          mockDb
+        })
+        break
+      }
+      case 'EndStrategy': {
+        mockDb = await StrategyProxy.EndStrategy.processEvent({
           event: { ...event, params: event.args },
           mockDb
         })
@@ -248,6 +316,13 @@ export const processTransaction = async (chainId: number, transactionHash: strin
       default:
         break
     }
+  }
+
+  const { blockNumber } = logs[0]
+  if (positionId && blockNumber !== null) {
+    mockDb = await runProcessing({ mockDb, positionId, chainId, transactionHash, blockNumber: Number(blockNumber) })
+  } else {
+    throw new Error('Position ID not found')
   }
 
   return mockDb

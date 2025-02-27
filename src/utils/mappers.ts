@@ -1,8 +1,7 @@
 import { fromHex } from "viem"
 import { Hex } from "viem"
-import { MoneyMarket } from "./types"
 
-export const positionIdMapper = (positionId: Hex) => {
+export const positionIdMapper = (positionId: string) => {
   const symbolHex = positionId.substring(0, 34) as Hex
   const symbol = fromHex(symbolHex, { size: 32, to: "string" })
   const mm = Number(`0x${positionId.substring(34, 36)}`)
@@ -11,7 +10,7 @@ export const positionIdMapper = (positionId: Hex) => {
   const number = Number(`0x${positionId.substring(54)}`)
   return {
     symbol,
-    mm: mm as MoneyMarket,
+    mm,
     number,
     positionId,
     maturity,

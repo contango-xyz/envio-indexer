@@ -1,5 +1,4 @@
-import { handlerContext } from 'generated'
-import { arbitrum, optimism, mainnet, polygon, gnosis, base, linea, scroll, avalanche, bsc } from 'viem/chains'
+import { arbitrum, avalanche, base, bsc, gnosis, linea, mainnet, optimism, polygon, scroll } from 'viem/chains'
 
 const moneyMarketEventsStartBlocks = {
   [arbitrum.id]: 285426286,
@@ -14,11 +13,6 @@ const moneyMarketEventsStartBlocks = {
   [bsc.id]: 44924353,
 }
 
-export const getIMoneyMarketEventsStartBlock = (chainId: number, context: handlerContext) => {
-  const startBlock = moneyMarketEventsStartBlocks[chainId as keyof typeof moneyMarketEventsStartBlocks]
-  if (!startBlock) {
-    context.log.error(`No IMoneyMarketEvents start block found for chainId ${chainId}. Assuming start block is 0`)
-    return 0
-  }
-  return startBlock
+export const getIMoneyMarketEventsStartBlock = (chainId: number) => {
+  return moneyMarketEventsStartBlocks[chainId as keyof typeof moneyMarketEventsStartBlocks] ?? 0n
 }

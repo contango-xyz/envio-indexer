@@ -86,8 +86,8 @@ const getTokenDetails = async (address: string, chainId: number) => {
         hexToString(alternateResults[2]).replace(/\u0000/g, ''),
       ];
     } catch (alternateError) {
-      console.error(`Alternate method failed for token ${address}:`);
       results = [0,"unknown","unknown"];
+      console.error(`Alternate method failed for token ${address}:`);
     }
   }
 
@@ -124,8 +124,6 @@ export async function getOrCreateToken(
   }
 
   const token = await getTokenDetails(address, chainId)
-
-  // save to db
   context.Token.set(token)
 
   return token;
