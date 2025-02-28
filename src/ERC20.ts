@@ -1,6 +1,7 @@
-import { ERC20, ERC20_Transfer_event, NonStandardWrappedNative, WrappedNative } from "generated";
+import { ERC20, ERC20_Transfer_event, WrappedNative } from "generated";
 import { zeroAddress } from "viem";
 import { eventStore } from "./Store";
+import { wrappedNativeMap } from "./utils/constants";
 import { createEventId } from "./utils/ids";
 import { EventType, TransferEvent } from "./utils/types";
 
@@ -32,36 +33,28 @@ const createContangoEvent = (event: ERC20_Transfer_event): TransferEvent => ({
 
 ERC20.Transfer.handler(async ({ event }) => {
   // add this if to filter out any mint/burn events. The only mint/burn events we would care about are the ones on the wrapped native token (which is handled below)
-  if (event.params.from !== zeroAddress && event.params.to !== zeroAddress) {
+  const [from, to] = [event.params.from, event.params.to].map(address => address.toLowerCase())
+  if (from !== zeroAddress && to !== zeroAddress) {
     eventStore.addLog({ event, contangoEvent: createContangoEvent(event) })
+  } else {
+    const [isMint, isBurn] = [from, to].map(address => address === zeroAddress)
+    const erc20Event: ERC20_Transfer_event = {
+      ...event,
+      params: {
+        from: isMint ? TRADER_CONSTANT : vaultProxy, // hardcode to vaultProxy to handle legacy implmentations where the flows went directly to/from the maestro proxy
+        to: isMint ? vaultProxy : TRADER_CONSTANT, // hardcode to vaultProxy to handle legacy implmentations where the flows went directly to/from the maestro proxy
+        value: event.params.value
+      }
+    }
+    const isWrappedNative = event.srcAddress.toLowerCase() === wrappedNativeMap[event.chainId]
+    if (isWrappedNative && (isMint || isBurn) && depositWithdrawalAddresses.includes(from) || depositWithdrawalAddresses.includes(to)) {
+      eventStore.addLog({ event, contangoEvent: createContangoEvent(erc20Event) })
+    }  
   }
 },
 {
   wildcard: true,
   eventFilters: depositWithdrawalFilters
-})
-
-// we cannot merge this logic into the handler above because there may be other tokens doing burn/mint events as transfers to/from zero address
-// need to handle this separately with a sepcific contract address (we're using the wildcard filter above)
-NonStandardWrappedNative.Transfer.handler(async ({ event }) => {
-  const isMint = event.params.from === zeroAddress
-  const isBurn = event.params.to === zeroAddress
-  const erc20Event: ERC20_Transfer_event = {
-    ...event,
-    params: {
-      from: isMint ? TRADER_CONSTANT : vaultProxy, // hardcode to vaultProxy to handle legacy implmentations where the flows went directly to/from the maestro proxy
-      to: isMint ? vaultProxy : TRADER_CONSTANT, // hardcode to vaultProxy to handle legacy implmentations where the flows went directly to/from the maestro proxy
-      value: event.params.value
-    }
-  }
-
-  if (isMint || isBurn) {
-    eventStore.addLog({ event, contangoEvent: createContangoEvent(erc20Event) })
-  }
-},
-{
-  // funds flowing to/from the maestro proxy is a legacy implementation. Here we only filter for events to/from the deposit/withdrawal addresses that have the zero address as the other party.
-  eventFilters: depositWithdrawalAddresses.map(address => ([{ to: zeroAddress, from: address }, { from: zeroAddress, to: address }])).flat()
 })
 
 WrappedNative.Deposit.handler(async ({ event }) => {

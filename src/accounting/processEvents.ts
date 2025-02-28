@@ -146,6 +146,12 @@ export const processEvents = async (
     shortCost: positionSnapshot.shortCost + fillItem.fillCost_short,
   }
 
+  if (newPosition.collateral <= 0n) fillItem.fillItemType = FillItemType.Closed
+  if (positionSnapshot.collateral === 0n) {
+    if (fillItem.fillItemType === FillItemType.Liquidated) fillItem.fillItemType = FillItemType.ClosedByLiquidation
+    else fillItem.fillItemType = FillItemType.Closed
+  }
+
   // return the new position, fillItem, and lots
   return { position: newPosition, fillItem, lots: { longLots, shortLots } }
 }
@@ -158,7 +164,25 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
     const migrationEvent = events.find(e => e.eventType === EventType.MIGRATED)
     if (migrationEvent) {
       const { newContangoPositionId, oldContangoPositionId } = migrationEvent as MigratedEvent
-      context.Position.deleteUnsafe(position.id)
+      const idOfNewPosition = createIdForPosition({ chainId, positionId: newContangoPositionId })
+
+      context.Position.set({
+        ...position,
+        collateral: 0n,
+        accruedLendingProfit: 0n,
+        debt: 0n,
+        accruedInterest: 0n,
+        fees_long: 0n,
+        fees_short: 0n,
+        cashflowBase: 0n,
+        cashflowQuote: 0n,
+        realisedPnl_long: 0n,
+        realisedPnl_short: 0n,
+        lotCount: 0,
+        longCost: 0n,
+        shortCost: 0n,
+        migratedTo_id: idOfNewPosition,
+      })
 
       const getEventsForPositionId = (positionId: string) => {
         return events.filter(e => {
@@ -232,9 +256,8 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
 
       const newPosition = {
         ...position,
-        id: createIdForPosition({ chainId, positionId: newContangoPositionId }),
+        id: idOfNewPosition,
         contangoPositionId: newContangoPositionId,
-        isOpen: true,
       }
 
       const newLots = lots.map((lot, index) => ({

@@ -1,13 +1,9 @@
+import fs from 'fs/promises'
 import { Lot, TestHelpers } from 'generated'
-import { decodeEventLog, erc20Abi, getAbiItem, Hex, Log, parseAbi, toEventSelector, zeroAddress } from 'viem'
+import path from 'path'
+import { decodeEventLog, erc20Abi, getAbiItem, Hex, Log, parseAbi, toEventSelector } from 'viem'
 import { contangoAbi, iMoneyMarketAbi, maestroAbi, positionNftAbi, simpleSpotExecutorAbi, spotExecutorAbi, strategyBuilderAbi, underlyingPositionFactoryAbi } from '../src/abis'
 import { clients } from '../src/clients'
-import fs from 'fs/promises'
-import path from 'path'
-import { eventStore } from '../src/Store'
-import { wrappedNativeMap } from '../src/utils/constants'
-import { arbitrum } from 'viem/chains'
-import { createIdForPosition } from '../src/utils/ids'
 
 const {
   ContangoProxy,
@@ -18,7 +14,6 @@ const {
   UnderlyingPositionFactory,
   MockDb,
   WrappedNative,
-  NonStandardWrappedNative,
   StrategyProxy,
   Maestro,
 } = TestHelpers
@@ -224,20 +219,10 @@ export const processTransaction = async (chainId: number, transactionHash: strin
       }
       case 'Transfer': {
         if ('value' in event.args) {
-          const isWrappedNative = event.srcAddress.toLowerCase() === wrappedNativeMap[event.chainId as keyof typeof wrappedNativeMap]
-          const [from, to] = [event.args.from, event.args.to].map(a => a.toLowerCase())
-          const isMintOrBurn = from === zeroAddress || to === zeroAddress
-          if (isWrappedNative && event.chainId === arbitrum.id && isMintOrBurn) {
-            mockDb = await NonStandardWrappedNative.Transfer.processEvent({
-              event: { ...event, params: event.args },
-                mockDb
-            })
-          } else {
-            mockDb = await ERC20.Transfer.processEvent({
-              event: { ...event, params: event.args },
-              mockDb
-            })
-          }
+          mockDb = await ERC20.Transfer.processEvent({
+            event: { ...event, params: event.args },
+            mockDb
+          })
         } else {
           mockDb = await PositionNFT.Transfer.processEvent({
             event: { ...event, params: event.args },
@@ -390,8 +375,14 @@ export const getTransactionHashes = async (chainId: number, positionId: Hex) => 
 export const processTransactions = async (chainId: number, positionId: Hex, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
   const transactionHashes = await getTransactionHashes(chainId, positionId)
 
+  console.log('transactionHashes', transactionHashes)
+
   for (let i = 0; i < transactionHashes.length; i++) {
     mockDb = await processTransaction(chainId, transactionHashes[i], mockDb)
+    const fillItem = mockDb.entities.FillItem.getAll()[i]
+    const position = mockDb.entities.Position.get(fillItem.position_id)
+    console.log('fillItem', fillItem)
+    console.log('position', position)
   }
 
   return mockDb

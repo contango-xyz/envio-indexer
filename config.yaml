@@ -11,19 +11,12 @@ contracts:
   handler: src/ERC20.ts
   events:
   - event: Transfer(address indexed from, address indexed to, uint256 value)
-- name: NonStandardWrappedNative
-  handler: src/ERC20.ts
-  events:
-  - event: Transfer(address indexed from, address indexed to, uint256 value)
 - name: ContangoProxy
   handler: src/ContangoProxy.ts
   events:
   - event: ClosingOnlySet(bytes16 indexed symbol, bool closingOnly)
   - event: InstrumentCreated(bytes16 indexed symbol, address base, address quote)
-  # - event: MoneyMarketRegistered(uint8 indexed id, address moneyMarket)
   - event: PositionUpserted(bytes32 indexed positionId, address indexed owner, address indexed tradedBy, uint8 cashflowCcy, int256 cashflow, int256 quantityDelta, uint256 price, uint256 fee, uint8 feeCcy)
-  # - event: RewardsClaimed(bytes32 indexed positionId, address indexed to)
-  # - event: Upgraded(address indexed implementation)
 - name: Maestro
   handler: src/Maestro.ts
   events:
@@ -121,8 +114,6 @@ networks:
   - name: SpotExecutor
   - name: IMoneyMarket
   - name: ERC20
-  - name: NonStandardWrappedNative
-    address: 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 # only include this for arbitrum!
   - name: WrappedNative
     address: 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
   - name: AaveLiquidations
@@ -133,249 +124,249 @@ networks:
   - name: SiloLiquidations
   - name: CometLiquidations
   - name: DolomiteLiquidations
-# - id: 8453 # Base
-#   start_block: 6373860
-#   contracts:
-#   - name: ContangoProxy
-#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-#   - name: StrategyProxy
-#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-#   - name: Maestro
-#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-#   - name: SimpleSpotExecutor
-#   - name: SpotExecutor
-#   - name: IMoneyMarket
-#   - name: ERC20
-#   - name: WETH
-#     address: 0x4200000000000000000000000000000000000006
-#   - name: AaveLiquidations
-#   - name: CompoundLiquidations
-#   - name: ExactlyLiquidations
-#   - name: MorphoLiquidations
-#   - name: EulerLiquidations
-#   - name: SiloLiquidations
-#   - name: CometLiquidations
-#   - name: DolomiteLiquidations
-# - id: 10 # Optimism
-#   start_block: 110323085
-#   contracts:
-#   - name: ContangoProxy
-#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-#   - name: StrategyProxy
-#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-#   - name: Maestro
-#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-#   - name: SimpleSpotExecutor
-#   - name: SpotExecutor
-#   - name: IMoneyMarket
-#   - name: ERC20
-#   - name: WETH
-#     address: 0x4200000000000000000000000000000000000006
-#   - name: AaveLiquidations
-#   - name: CompoundLiquidations
-#   - name: ExactlyLiquidations
-#   - name: MorphoLiquidations
-#   - name: EulerLiquidations
-#   - name: SiloLiquidations
-#   - name: CometLiquidations
-#   - name: DolomiteLiquidations
-# - id: 8453 # Base
-#   start_block: 6373860
-#   contracts:
-#   - name: ContangoProxy
-#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-#   - name: StrategyProxy
-#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-#   - name: Maestro
-#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-#   - name: SimpleSpotExecutor
-#   - name: SpotExecutor
-#   - name: IMoneyMarket
-#   - name: ERC20
-#   - name: WETH
-#     address: 0x4200000000000000000000000000000000000006
-#   - name: AaveLiquidations
-#   - name: CompoundLiquidations
-#   - name: ExactlyLiquidations
-#   - name: MorphoLiquidations
-#   - name: EulerLiquidations
-#   - name: SiloLiquidations
-#   - name: CometLiquidations
-#   - name: DolomiteLiquidations
-# - id: 8453 # Base
-#   start_block: 6373860
-#   contracts:
-#   - name: ContangoProxy
-#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-#   - name: StrategyProxy
-#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-#   - name: Maestro
-#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-#   - name: SimpleSpotExecutor
-#   - name: SpotExecutor
-#   - name: IMoneyMarket
-#   - name: ERC20
-#   - name: WETH
-#     address: 0x4200000000000000000000000000000000000006
-#   - name: AaveLiquidations
-#   - name: CompoundLiquidations
-#   - name: ExactlyLiquidations
-#   - name: MorphoLiquidations
-#   - name: EulerLiquidations
-#   - name: SiloLiquidations
-#   - name: CometLiquidations
-#   - name: DolomiteLiquidations
-# - id: 8453 # Base
-#   start_block: 6373860
-#   contracts:
-#   - name: ContangoProxy
-#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-#   - name: StrategyProxy
-#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-#   - name: Maestro
-#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-#   - name: SimpleSpotExecutor
-#   - name: SpotExecutor
-#   - name: IMoneyMarket
-#   - name: ERC20
-#   - name: WETH
-#     address: 0x4200000000000000000000000000000000000006
-#   - name: AaveLiquidations
-#   - name: CompoundLiquidations
-#   - name: ExactlyLiquidations
-#   - name: MorphoLiquidations
-#   - name: EulerLiquidations
-#   - name: SiloLiquidations
-#   - name: CometLiquidations
-#   - name: DolomiteLiquidations
-# - id: 8453 # Base
-#   start_block: 6373860
-#   contracts:
-#   - name: ContangoProxy
-#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-#   - name: StrategyProxy
-#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-#   - name: Maestro
-#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-#   - name: SimpleSpotExecutor
-#   - name: SpotExecutor
-#   - name: IMoneyMarket
-#   - name: ERC20
-#   - name: WETH
-#     address: 0x4200000000000000000000000000000000000006
-#   - name: AaveLiquidations
-#   - name: CompoundLiquidations
-#   - name: ExactlyLiquidations
-#   - name: MorphoLiquidations
-#   - name: EulerLiquidations
-#   - name: SiloLiquidations
-#   - name: CometLiquidations
-#   - name: DolomiteLiquidations
-# - id: 8453 # Base
-#   start_block: 6373860
-#   contracts:
-#   - name: ContangoProxy
-#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-#   - name: StrategyProxy
-#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-#   - name: Maestro
-#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-#   - name: SimpleSpotExecutor
-#   - name: SpotExecutor
-#   - name: IMoneyMarket
-#   - name: ERC20
-#   - name: WETH
-#     address: 0x4200000000000000000000000000000000000006
-#   - name: AaveLiquidations
-#   - name: CompoundLiquidations
-#   - name: ExactlyLiquidations
-#   - name: MorphoLiquidations
-#   - name: EulerLiquidations
-#   - name: SiloLiquidations
-#   - name: CometLiquidations
-#   - name: DolomiteLiquidations
-# - id: 8453 # Base
-#   start_block: 6373860
-#   contracts:
-#   - name: ContangoProxy
-#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-#   - name: StrategyProxy
-#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-#   - name: Maestro
-#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-#   - name: SimpleSpotExecutor
-#   - name: SpotExecutor
-#   - name: IMoneyMarket
-#   - name: ERC20
-#   - name: WETH
-#     address: 0x4200000000000000000000000000000000000006
-#   - name: AaveLiquidations
-#   - name: CompoundLiquidations
-#   - name: ExactlyLiquidations
-#   - name: MorphoLiquidations
-#   - name: EulerLiquidations
-#   - name: SiloLiquidations
-#   - name: CometLiquidations
-#   - name: DolomiteLiquidations
-# - id: 8453 # Base
-#   start_block: 6373860
-#   contracts:
-#   - name: ContangoProxy
-#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-#   - name: StrategyProxy
-#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-#   - name: Maestro
-#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-#   - name: SimpleSpotExecutor
-#   - name: SpotExecutor
-#   - name: IMoneyMarket
-#   - name: ERC20
-#   - name: WETH
-#     address: 0x4200000000000000000000000000000000000006
-#   - name: AaveLiquidations
-#   - name: CompoundLiquidations
-#   - name: ExactlyLiquidations
-#   - name: MorphoLiquidations
-#   - name: EulerLiquidations
-#   - name: SiloLiquidations
-#   - name: CometLiquidations
-#   - name: DolomiteLiquidations
+- id: 8453 # Base
+  start_block: 6373860
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: WrappedNative
+    address: 0x4200000000000000000000000000000000000006
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
+- id: 10 # Optimism
+  start_block: 110323085
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: WrappedNative
+    address: 0x4200000000000000000000000000000000000006
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
+- id: 1 # Mainnet
+  start_block: 6373860
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: WrappedNative
+    address: 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
+- id: 137 # Polygon
+  start_block: 6373860
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: WrappedNative
+    address: 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
+- id: 59144 # Linea
+  start_block: 6373860
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: WrappedNative
+    address: 0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
+- id: 53452 # Scroll
+  start_block: 6373860
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: WrappedNative
+    address: 0x5300000000000000000000000000000000000004
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
+- id: 43114 # Avalanche
+  start_block: 6373860
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: WrappedNative
+    address: 0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
+- id: 100 # Gnosis
+  start_block: 6373860
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: WrappedNative
+    address: 0xe91d153e0b41518a2ce8dd3d7944fa863463a97d
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
+- id: 56 # Bsc
+  start_block: 6373860
+  contracts:
+  - name: ContangoProxy
+    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: StrategyProxy
+    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: Maestro
+    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+  - name: SimpleSpotExecutor
+  - name: SpotExecutor
+  - name: IMoneyMarket
+  - name: ERC20
+  - name: WrappedNative
+    address: 0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c
+  - name: AaveLiquidations
+  - name: CompoundLiquidations
+  - name: ExactlyLiquidations
+  - name: MorphoLiquidations
+  - name: EulerLiquidations
+  - name: SiloLiquidations
+  - name: CometLiquidations
+  - name: DolomiteLiquidations
 rollback_on_reorg: false
 field_selection:
   transaction_fields:

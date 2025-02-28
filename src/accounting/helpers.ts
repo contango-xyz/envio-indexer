@@ -1,13 +1,12 @@
 import { ContangoSwapEvent, Position, Token } from "generated";
-import { zeroAddress } from "viem";
+import { TRADER_CONSTANT, vaultProxy } from "../ERC20";
+import { getMarkPrice } from "../utils/common";
 import { getIMoneyMarketEventsStartBlock } from "../utils/constants";
 import { createTokenId, decodeTokenId } from "../utils/getTokenDetails";
 import { max, mulDiv } from "../utils/math-helpers";
+import { recordEntries, recordFromEntries } from "../utils/record-utils";
 import { ContangoEvents, EventType, FillItemType, TransferEvent } from "../utils/types";
 import { deriveFillItemValuesFromPositionUpsertedEvent } from "./legacy";
-import { getMarkPrice } from "../utils/common";
-import { TRADER_CONSTANT, vaultProxy } from "../ERC20";
-import { recordEntries, recordFromEntries } from "../utils/record-utils";
 
 export type PartialFillItem = {
   cashflowSwap?: ContangoSwapEvent;
@@ -48,7 +47,7 @@ const emptyPartialFillItem = (collateralToken: Token): PartialFillItem => ({
   fee: 0n,
   cashflowSwap: undefined,
   liquidationPenalty: 0n,
-  fillItemType: FillItemType.Trade,
+  fillItemType: FillItemType.Modified,
 })
 
 const eventsToFillItem = (position: Position, debtToken: Token, collateralToken: Token, event: ContangoEvents, existingFillItem: PartialFillItem): PartialFillItem => {
@@ -102,7 +101,7 @@ const eventsToFillItem = (position: Position, debtToken: Token, collateralToken:
         lendingProfitToSettle: event.lendingProfitToSettle,
         debtCostToSettle: event.debtCostToSettle,
         liquidationPenalty: event.liquidationPenalty,
-        fillItemType: FillItemType.Liquidation,
+        fillItemType: FillItemType.Liquidated,
       }
     }
     case EventType.TRANSFER: {
@@ -113,7 +112,7 @@ const eventsToFillItem = (position: Position, debtToken: Token, collateralToken:
 
       if (toTrader || fromTrader) {
         // main cashflow event always happens before any dust sweeping events. This means that if the cashflow is already assigned, we know that we're handling a dust sweeping event
-        if (existingFillItem.cashflow !== 0n) return { ...existingFillItem, residualCashflow: { value: cashflow, tokenId: createTokenId({ chainId: event.chainId, address: event.srcAddress }) } }  
+        if (existingFillItem.cashflow !== 0n) return { ...existingFillItem, residualCashflow: { value: cashflow, tokenId: createTokenId({ chainId: event.chainId, address: event.srcAddress }) } }
         if (toTrader) return { ...existingFillItem, cashflow, cashflowToken_id: createTokenId({ chainId: event.chainId, address: event.srcAddress }) }
         if (fromTrader) return { ...existingFillItem, cashflow, cashflowToken_id: createTokenId({ chainId: event.chainId, address: event.srcAddress }) }
       }
@@ -161,7 +160,7 @@ export const calculateDust = (events: ContangoEvents[], partialFillItem: Partial
   }
 
   const record = events
-    .filter(e => e.eventType === EventType.TRANSFER) // get only the transfer events
+    .filter((e): e is TransferEvent => e.eventType === EventType.TRANSFER) // get only the transfer events
     .filter(e => ([e.to, e.from].includes(vaultProxy))) // only transfers to/from the vault
     .map(e => e.to === vaultProxy ? e : { ...e, value: e.value * -1n })
     .reduce((acc, e) => {

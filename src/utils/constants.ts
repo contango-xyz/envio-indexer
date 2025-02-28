@@ -19,7 +19,7 @@ export const getIMoneyMarketEventsStartBlock = (chainId: number) => {
 
 // ALL USE STANDARD DEPOSIT/WITHDRAWAL EVENTS EXCEPT ARBITRUM AND SCROLL
 // IMPORTANT: If adding an address here, make sure to lowercase it
-export const wrappedNativeMap = {
+export const wrappedNativeMap: Record<number, string> = {
   [mainnet.id]: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
   [optimism.id]: '0x4200000000000000000000000000000000000006',
   [arbitrum.id]: '0x82af49447d8a07e3bd95bd0d56f35241523fbab1', // Not standard Deposit/Withdrawal events (uses Transfer event to/from zero address) NOT STANDARD!!!!

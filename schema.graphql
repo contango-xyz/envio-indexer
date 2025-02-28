@@ -76,7 +76,6 @@ type Position {
   id: ID! # CtxPositionId
   chainId: Int!
   owner: String! @index
-  isOpen: Boolean!
   contangoPositionId: String!
   createdAtBlock: Int! @index
   createdAtTimestamp: Int! @index
@@ -108,6 +107,8 @@ type Position {
 
   longCost: BigInt!
   shortCost: BigInt!
+
+  migratedTo_id: String
 }
 
 type Token {

@@ -10,11 +10,10 @@ import { createPosition } from "./accounting/positions";
 import { eventStore } from "./Store";
 import { createInstrumentId, getPositionSafe } from "./utils/common";
 import { getOrCreateToken } from "./utils/getTokenDetails";
-import { createEventId } from "./utils/ids";
+import { createEventId, createFillItemId } from "./utils/ids";
 import { strategyContractsAddresses } from "./utils/previousContractAddresses";
 import { EventType, PositionUpsertedEvent } from "./utils/types";
 
-// re-run
 ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
   const contangoEvent: PositionUpsertedEvent = {
     ...event.params,
@@ -47,9 +46,8 @@ PositionNFT.Transfer.handler(async ({ event, context }) => {
 
     if (position) {
       const owner = isTransferToStrategyBuilder || to === zeroAddress ? position.owner : to
-      const isOpen = to !== zeroAddress // update isOpen when NFT is transferred to the zero address
   
-      context.Position.set({ ...position, owner, isOpen })
+      context.Position.set({ ...position, owner })
     } else {
       if (!strategyContractsAddresses(event.chainId).has(from)) throw new Error(`Position not found for NFT transfer event. tx hash: ${event.transaction.hash}`)
       

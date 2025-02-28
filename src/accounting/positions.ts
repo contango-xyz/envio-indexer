@@ -29,7 +29,6 @@ export const createPosition = async (
     proxyAddress,
     contangoPositionId: positionId,
     owner,
-    isOpen: true,
     createdAtBlock: blockNumber,
     createdAtTimestamp: timestamp,
     createdAtTransactionHash: transactionHash,
@@ -49,6 +48,7 @@ export const createPosition = async (
     lotCount: 0,
     longCost: 0n,
     shortCost: 0n,
+    migratedTo_id: undefined,
   }
 
   context.Position.set(newPosition)

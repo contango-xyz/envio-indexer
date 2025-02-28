@@ -1,5 +1,5 @@
 import { expect } from 'chai'
-import { TestHelpers } from 'generated'
+import { Position, TestHelpers } from 'generated'
 import { describe, it } from 'mocha'
 import { AccountingType } from '../src/accounting/lotsAccounting'
 import { createIdForPosition } from '../src/utils/ids'
@@ -109,19 +109,55 @@ describe('indexer tests', () => {
     const positionId = '0x5745544855534443000000000000000001ffffffff0000000000000000005271'
     const transactionHashes = await getTransactionHashes(42161, positionId)
 
+    let previousPosition: Position | undefined
+
     for (let i = 0; i < transactionHashes.length; i++) {
       mockDb = await processTransaction(42161, transactionHashes[i], mockDb)
-      const lots = mockDb.entities.Lot.getAll()
-      let fillItems = mockDb.entities.FillItem.getAll()
-      let position = mockDb.entities.Position.get(createIdForPosition({ chainId: 42161, positionId }))
+      const oldPosition = mockDb.entities.Position.get(createIdForPosition({ chainId: 42161, positionId }))
+      if (!oldPosition) throw new Error('Position not found in test!')
 
-      if (!position) {
-        const migratedToPositionId = '0x5745544855534443000000000000000011ffffffff00000000000000000053e2'
-        position = mockDb.entities.Position.get(createIdForPosition({ chainId: 42161, positionId: migratedToPositionId }))
-        if (!position) throw new Error('Position not found in test!')
-        fillItems = [fillItems[i], fillItems[i + 1]]
+      const migratedToPositionId = '0x5745544855534443000000000000000011ffffffff00000000000000000053e2'
+      const newPosition = mockDb.entities.Position.get(createIdForPosition({ chainId: 42161, positionId: migratedToPositionId }))
+
+      if (newPosition) {
+        console.log('newPosition', newPosition)
+        const fillItems = mockDb.entities.FillItem.getAll()
+        console.log('fillItems', fillItems)
+        expect(newPosition.collateral).to.equal(previousPosition?.collateral)
+        expect(newPosition.debt).to.equal(previousPosition?.debt)
       }
+
+      previousPosition = oldPosition
     }
+  })
+
+  it('0x777374455448574554480000000000001fffffffff0000000005000000004b63', async function() {
+    this.timeout(30000)
+    const id = createIdForPosition({ chainId: 42161, positionId: '0x777374455448574554480000000000001fffffffff0000000005000000004b63' })
+    mockDb = await processTransactions(42161, '0x777374455448574554480000000000001fffffffff0000000005000000004b63', mockDb)
+
+    const oldPosition = mockDb.entities.Position.get(id)
+    if (!oldPosition) throw new Error('Position not found in test!')
+
+    expect(oldPosition.migratedTo_id).to.equal('42161_0x777374455448574554480000000000000effffffff00000000030000000053f9')
+    expect(oldPosition.cashflowBase).to.equal(0n)
+    expect(oldPosition.cashflowQuote).to.equal(0n)
+    expect(oldPosition.realisedPnl_long).to.equal(0n)
+    expect(oldPosition.realisedPnl_short).to.equal(0n)
+    expect(oldPosition.longCost).to.equal(0n)
+    expect(oldPosition.shortCost).to.equal(0n)
+    expect(oldPosition.collateral).to.equal(0n)
+    expect(oldPosition.debt).to.equal(0n)
+    expect(oldPosition.accruedLendingProfit).to.equal(0n)
+    expect(oldPosition.accruedInterest).to.equal(0n)
+    expect(oldPosition.fees_long).to.equal(0n)
+    expect(oldPosition.fees_short).to.equal(0n)
+    
+    const newPosition = mockDb.entities.Position.get(oldPosition.migratedTo_id!)
+    if (!newPosition) throw new Error('New position not found in test!')
+
+    expect(newPosition.migratedTo_id).to.equal(undefined)
+    expect(Number(newPosition.collateral)).to.be.greaterThan(0)
   })
 
   it('ARB/USDC long - Chain: Arbitrum - Number: #5488 - REALISED PNL IS FUCKED', async function() {

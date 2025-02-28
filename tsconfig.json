@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
-    "target": "ESNext", //required for use with BigInt types
+    "target": "es2022", //required for use with BigInt types
     "lib": [
-      "ESNext"
+      "es2022"
     ],
     "allowJs": true,
     "checkJs": false,

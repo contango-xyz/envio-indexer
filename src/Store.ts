@@ -45,7 +45,6 @@ class EventStore {
 
         return snapshot
       } catch (e) {
-        console.error('error getting position snapshot: ', e)
         return null
       }
     }

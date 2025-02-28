@@ -51,10 +51,13 @@ export type ContangoEvents =
   | UnderlyingPositionCreated;
 
 export enum FillItemType {
-  Trade = "Trade",
-  Liquidation = "Liquidation",
-  MigrationClose = "MigrationClose",
-  MigrationOpen = "MigrationOpen",
+  Opened = 'Opened',
+  Closed = 'Closed',
+  ClosedByLiquidation = 'Liquidated (Closed)',
+  Modified = 'Modified',
+  Liquidated = "Liquidated",
+  MigrationClose = "Closed (M)",
+  MigrationOpen = "Opened (M)",
 }
 
 export type Mutable<T> = {
