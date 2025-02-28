@@ -8,7 +8,7 @@ import { createIdForPosition } from "./ids";
 import { mulDiv } from "./math-helpers";
 import { ReturnPromiseType } from "./types";
 import { positionIdMapper } from "./mappers";
-import { contangoProxy } from "../ERC20";
+import { maestroProxy } from "../ERC20";
 import { arbitrum, avalanche, base, bsc, gnosis, mainnet, optimism, polygon, scroll } from "viem/chains";
 
 export const lensAbi = parseAbi([
@@ -55,7 +55,7 @@ const getPrices = async ({ chainId, positionId, blockNumber }: { chainId: number
   const { symbolHex } = positionIdMapper(positionId)
   const client = clients[chainId]
   const lens = getContract({ abi: iContangoLensAbi, address: lensAddress, client })
-  const contango = getContract({ abi: contangoAbi, address: contangoProxy, client })
+  const contango = getContract({ abi: contangoAbi, address: maestroProxy, client })
 
   try {
     return await lens.read.prices([positionId as Hex], { blockNumber })

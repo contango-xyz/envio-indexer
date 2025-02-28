@@ -9,10 +9,15 @@ import { Mutable } from "viem";
 import { eventStore, PositionSnapshot } from "../Store";
 import { createFillItemId, createIdForLot, createIdForPosition } from "../utils/ids";
 import { ContangoEvents, EventType, FillItemType, MigratedEvent } from "../utils/types";
-import { calculateCashflowsAndFee, eventsToPartialFillItem, withMarkPrice } from "./helpers";
+import { calculateCashflowsAndFee, calculateDust, eventsToPartialFillItem, withMarkPrice } from "./helpers";
 import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCostDelta, handleCloseSize, initialiseLot, savePosition } from "./lotsAccounting";
-import { max, mulDiv } from "../utils/math-helpers";
+import { absolute, max, mulDiv } from "../utils/math-helpers";
 import { getMarkPrice } from "../utils/common";
+import { vaultProxy } from "../ERC20";
+
+const calculateFillPrice = ({ fillCost, delta, unit }: { fillCost: bigint; delta: bigint; unit: bigint; }) => {
+  return absolute(mulDiv(fillCost, unit, delta))
+}
 
 export const processEvents = async (
   {
@@ -36,10 +41,18 @@ export const processEvents = async (
   // create the basic (partial) fillItem
   const partialFillItem = await withMarkPrice(positionSnapshot, eventsToPartialFillItem(positionSnapshot, debtToken, collateralToken, events), blockNumber, debtToken, collateralToken)
 
-  const { cashflowQuote, cashflowBase, fee_long, fee_short } = calculateCashflowsAndFee(partialFillItem, debtToken, collateralToken, partialFillItem.dust)
+  // dust left in the vault
+  const dustRecord = calculateDust(events, partialFillItem)
+
+  const { cashflowQuote, cashflowBase, fee_long, fee_short } = calculateCashflowsAndFee({ partialFillItem, debtToken, collateralToken, dustRecord })
+
+  const fillCost_short = partialFillItem.collateralDelta - cashflowBase
+  const fillCost_long = -(partialFillItem.debtDelta + cashflowQuote)
+
+  const fillPrice_long = calculateFillPrice({ fillCost: fillCost_long, unit: collateralToken.unit, delta: partialFillItem.collateralDelta })
+  const fillPrice_short = calculateFillPrice({ fillCost: fillCost_short, unit: debtToken.unit, delta: partialFillItem.debtDelta })
 
   const fillItem: Mutable<FillItem> = {
-    ...partialFillItem,
     id: createFillItemId({ ...genericEvent, positionId: positionSnapshot.contangoPositionId }),
     timestamp: genericEvent.block.timestamp,
     chainId: genericEvent.chainId,
@@ -56,19 +69,32 @@ export const processEvents = async (
     fee: partialFillItem.fee,
     feeToken_id: partialFillItem.feeToken_id,
     position_id: positionSnapshot.id,
-    dust: partialFillItem.dust?.value ?? 0n,
+    dust: partialFillItem.residualCashflow?.value ?? 0n,
+    collateralDelta: partialFillItem.collateralDelta,
+    debtCostToSettle: partialFillItem.debtCostToSettle,
+    debtDelta: partialFillItem.debtDelta,
+    cashflow: partialFillItem.cashflow,
+    cashflowToken_id: partialFillItem.cashflowToken_id,
+    fillItemType: partialFillItem.fillItemType,
+    lendingProfitToSettle: partialFillItem.lendingProfitToSettle,
+    liquidationPenalty: partialFillItem.liquidationPenalty,
+    swapPrice_long: partialFillItem.swapPrice_long,
+    swapPrice_short: partialFillItem.swapPrice_short,
+    fillCost_long,
+    fillCost_short,
+    fillPrice_long,
+    fillPrice_short,
   } as const satisfies FillItem
 
   let longLots: Mutable<Lot>[] = [...lotsSnapshot.filter(lot => lot.accountingType === AccountingType.Long)] // create a copy
   let shortLots: Mutable<Lot>[] = [...lotsSnapshot.filter(lot => lot.accountingType === AccountingType.Short)] // create a copy
 
   longLots = await allocateFundingProfitToLots({ lots: longLots, fundingProfitToSettle: fillItem.lendingProfitToSettle }) // size grows, which is a good thing
-  longLots = await allocateFundingCostToLots({ lots: longLots, fundingCostToSettle: -fillItem.debtCostToSettle }) // cost grows
+  longLots = await allocateFundingCostToLots({ lots: longLots, fundingCostToSettle: fillItem.debtCostToSettle }) // cost grows
   
-  shortLots = await allocateFundingProfitToLots({ lots: shortLots, fundingProfitToSettle: fillItem.debtCostToSettle }) // size grows, but it's actually a negative thing because your size is your debt!
+  shortLots = await allocateFundingProfitToLots({ lots: shortLots, fundingProfitToSettle: -fillItem.debtCostToSettle }) // size grows, but it's actually a negative thing because your size is your debt!
   shortLots = await allocateFundingCostToLots({ lots: shortLots, fundingCostToSettle: -fillItem.lendingProfitToSettle }) // cost grows, but it's actually a good thing because your cost is your collateral!
 
-  const shortCost = fillItem.collateralDelta - fillItem.cashflowBase
   if (fillItem.debtDelta > 0n) {
     // create new short lot if adding debt
     shortLots.push(
@@ -77,15 +103,15 @@ export const processEvents = async (
         position: positionSnapshot,
         accountingType: AccountingType.Short,
         size: -fillItem.debtDelta,
-        cost: shortCost
+        cost: fillCost_short
       })
     )
   } else if (fillItem.debtDelta < 0n) {
-    fillItem.realisedPnl_short += shortCost
-    shortLots = handleCloseSize({ lots: shortLots, position: positionSnapshot, fillItem, sizeDelta: fillItem.debtDelta, accountingType: AccountingType.Short, ...genericEvent })
+    const closedCostRef = { value: 0n }
+    shortLots = handleCloseSize({ closedCostRef, lots: shortLots, position: positionSnapshot, fillItem, sizeDelta: fillItem.debtDelta, accountingType: AccountingType.Short, ...genericEvent })
+    fillItem.realisedPnl_short = fillCost_short - closedCostRef.value
   }
 
-  const longCost = -(fillItem.cashflowQuote + fillItem.debtDelta)
   if (fillItem.collateralDelta > 0n) {
     // create new long lot if adding collateral
     longLots.push(
@@ -94,12 +120,13 @@ export const processEvents = async (
         position: positionSnapshot,
         accountingType: AccountingType.Long,
         size: fillItem.collateralDelta,
-        cost: longCost
+        cost: fillCost_long
       })
     )
   } else if (fillItem.collateralDelta < 0n) {
-    fillItem.realisedPnl_long += longCost
-    longLots = handleCloseSize({ lots: longLots, position: positionSnapshot, fillItem, sizeDelta: fillItem.collateralDelta, accountingType: AccountingType.Long, ...genericEvent })
+    const closedCostRef = { value: 0n }
+    longLots = handleCloseSize({ closedCostRef, lots: longLots, position: positionSnapshot, fillItem, sizeDelta: fillItem.collateralDelta, accountingType: AccountingType.Long, ...genericEvent })
+    fillItem.realisedPnl_long = fillCost_long - closedCostRef.value
   }
 
   // update the position
@@ -115,6 +142,8 @@ export const processEvents = async (
     debt: positionSnapshot.debt + fillItem.debtDelta,
     accruedLendingProfit: positionSnapshot.accruedLendingProfit + fillItem.lendingProfitToSettle,
     accruedInterest: positionSnapshot.accruedInterest + fillItem.debtCostToSettle,
+    longCost: positionSnapshot.longCost + fillItem.fillCost_long,
+    shortCost: positionSnapshot.shortCost + fillItem.fillCost_short,
   }
 
   // return the new position, fillItem, and lots
@@ -141,6 +170,9 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
           return false
         })
       }
+
+      const fillCost_long = position.longCost * -1n
+      const fillCost_short = position.shortCost * -1n
       
       const fillItem: Mutable<FillItem> = {
         ...eventsToPartialFillItem(position, debtToken, collateralToken, getEventsForPositionId(oldContangoPositionId)),
@@ -162,6 +194,10 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         position_id: position.id,
         dust: 0n,
         fillItemType: FillItemType.MigrationClose,
+        fillCost_long,
+        fillCost_short,
+        fillPrice_long: calculateFillPrice({ fillCost: fillCost_long, unit: collateralToken.unit, delta: position.collateral }),
+        fillPrice_short: calculateFillPrice({ fillCost: fillCost_short, unit: debtToken.unit, delta: position.debt }),
       } as const satisfies FillItem
 
       context.FillItem.set(fillItem)
@@ -186,6 +222,10 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         position_id: position.id,
         dust: 0n,
         fillItemType: FillItemType.MigrationOpen,
+        fillCost_long: position.longCost,
+        fillCost_short: position.shortCost,
+        fillPrice_long: calculateFillPrice({ fillCost: position.longCost, unit: collateralToken.unit, delta: position.collateral }),
+        fillPrice_short: calculateFillPrice({ fillCost: position.shortCost, unit: debtToken.unit, delta: position.debt }),
       } as const satisfies FillItem
 
       context.FillItem.set(openingFillItem)
@@ -213,7 +253,7 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
     }
 
     const result = await processEvents({ genericEvent: event, events, position, lots, debtToken, collateralToken })
-  
+
     context.FillItem.set(result.fillItem)
     await savePosition({ position: result.position, lots: [...result.lots.longLots, ...result.lots.shortLots], context })
   } catch (e) {

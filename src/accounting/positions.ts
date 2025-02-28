@@ -47,6 +47,8 @@ export const createPosition = async (
     moneyMarket: mm,
     number,
     lotCount: 0,
+    longCost: 0n,
+    shortCost: 0n,
   }
 
   context.Position.set(newPosition)

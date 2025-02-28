@@ -27,8 +27,8 @@ export const deriveFillItemValuesFromPositionUpsertedEvent = (
 
   const newFillItem = { ...fillItem }
 
-  newFillItem.tradePrice_long = price || newFillItem.tradePrice_long
-  newFillItem.tradePrice_short = mulDiv(collateralToken.unit, debtToken.unit, price) || newFillItem.tradePrice_short
+  newFillItem.swapPrice_long = price || newFillItem.swapPrice_long
+  newFillItem.swapPrice_short = mulDiv(collateralToken.unit, debtToken.unit, price) || newFillItem.swapPrice_short
   newFillItem.collateralDelta += quantityDelta
   
   let accruedLendingProfit = 0n

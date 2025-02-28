@@ -49,7 +49,7 @@ class EventStore {
         return null
       }
     }
-    return result
+    return { ...result, event }
   }
 
   async setPositionSnapshot(snapshot: PositionSnapshot) {

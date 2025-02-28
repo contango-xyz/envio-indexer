@@ -2,12 +2,16 @@
 name: envio-indexer
 unordered_multichain_mode: true
 contracts:
-- name: WETH
+- name: WrappedNative
   handler: src/ERC20.ts
   events:
   - event: Deposit(address indexed dst, uint wad)
   - event: Withdrawal(address indexed src, uint wad)
 - name: ERC20
+  handler: src/ERC20.ts
+  events:
+  - event: Transfer(address indexed from, address indexed to, uint256 value)
+- name: NonStandardWrappedNative
   handler: src/ERC20.ts
   events:
   - event: Transfer(address indexed from, address indexed to, uint256 value)
@@ -117,7 +121,9 @@ networks:
   - name: SpotExecutor
   - name: IMoneyMarket
   - name: ERC20
-  - name: WETH
+  - name: NonStandardWrappedNative
+    address: 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 # only include this for arbitrum!
+  - name: WrappedNative
     address: 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
   - name: AaveLiquidations
   - name: CompoundLiquidations

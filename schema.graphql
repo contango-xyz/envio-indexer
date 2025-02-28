@@ -48,8 +48,14 @@ type FillItem {
 
   position: Position! @index
 
-  tradePrice_long: BigInt!
-  tradePrice_short: BigInt!
+  swapPrice_long: BigInt! # swap price in debt ccy terms
+  swapPrice_short: BigInt! # swap price in collateral ccy terms
+
+  fillCost_long: BigInt! # actual cost paid. dividing this by collateral delta will give the true fill price (including any flashloan fees etc)
+  fillCost_short: BigInt! # actual cost paid. dividing this by debt delta will give the true fill price (including any flashloan fees etc)
+
+  fillPrice_long: BigInt! # fillCostLong divided by collateralDelta
+  fillPrice_short: BigInt! # fillCostShort divided by debtDelta
 
   fee: BigInt!
   feeToken: Token
@@ -99,6 +105,9 @@ type Position {
 
   fees_long: BigInt!
   fees_short: BigInt!
+
+  longCost: BigInt!
+  shortCost: BigInt!
 }
 
 type Token {
@@ -144,6 +153,18 @@ type PositionNFT_Transfer {
   from: String!
   to: String!
   tokenId: BigInt!
+}
+
+type ERC20_Transfer {
+  id: ID! # `${createEventId({ eventType: EventType.TRANSFER })}`
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  chainId: Int!
+  from: String!
+  to: String!
+  value: BigInt!
+  srcAddress: String!
 }
 
 enum ContangoEventType {

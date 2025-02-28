@@ -29,11 +29,6 @@ ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
   eventStore.addLog({ event, contangoEvent })
 
   await eventStore.getCurrentPositionSnapshot({ event, context })
-
-  // if (snapshot) {
-  //   // we cannot safely delete the snapshot here yet, because the upserted event may not be the last event in the tx
-  //   await eventsReducer({ ...snapshot, context })
-  // }
 })
 
 // On create, the NFT transfer event is emitted before the UnderlyingPositionCreated event

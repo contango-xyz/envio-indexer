@@ -88,6 +88,7 @@ export const handleCloseSize = ({
   lots,
   accountingType,
   sizeDelta,
+  closedCostRef,
   ...event
 }: GenericEvent & {
   fillItem: Mutable<Pick<FillItem, 'realisedPnl_short' | 'realisedPnl_long' | 'cashflowBase'>>;
@@ -95,6 +96,7 @@ export const handleCloseSize = ({
   lots: Mutable<Lot>[];
   accountingType: AccountingType;
   sizeDelta: bigint;
+  closedCostRef: Mutable<{ value: bigint }>;
 }) => {
 
   // realise pnl for the lots that are being closed
@@ -110,16 +112,11 @@ export const handleCloseSize = ({
     remainingSizeDelta -= closedSize
 
     const closedCost = mulDiv(lot.openCost, closedSize, lot.size)
+    closedCostRef.value += closedCost
     const grossClosedCost = mulDiv(lot.grossOpenCost, grossClosedSize, lot.grossSize)
 
     newLot.openCost += closedCost
     newLot.grossOpenCost += grossClosedCost
-
-    if (accountingType === AccountingType.Long) {
-      fillItem.realisedPnl_long -= closedCost
-    } else {
-      fillItem.realisedPnl_short -= closedCost
-    }
 
     if (closedSize === -lot.size) {
       newLot.closedAtBlock = event.block.number
@@ -127,6 +124,7 @@ export const handleCloseSize = ({
 
     return newLot
   })
+
 }
 
 export const handleCostDelta = ({ lots, fillItem, costDelta, accountingType }: { fillItem: Mutable<Pick<FillItem, 'realisedPnl_short' | 'realisedPnl_long' | 'cashflowBase'>>; lots: Mutable<Lot>[]; costDelta: bigint; accountingType: AccountingType }) => {
@@ -156,14 +154,15 @@ export const loadLots = async ({ position, context }: { position: Position; cont
 
 export const savePosition = async ({ position, lots, context }: { position: Position; lots: Lot[]; context: handlerContext }) => {
   // Save all lots in parallel
-  await Promise.all(lots.map((lot, idx) => context.Lot.set({ ...lot, id: createIdForLot({ chainId: lot.chainId, positionId: lot.contangoPositionId, index: idx }) })))
+  const openLots = lots.filter((lot) => !lot.closedAtBlock).map((lot, idx) => ({ ...lot, id: createIdForLot({ chainId: lot.chainId, positionId: lot.contangoPositionId, index: idx }) }))
+  const openIds = new Set<Lot['id']>(openLots.map(lot => lot.id))
 
-  if (position.lotCount !== lots.length) {
-    if (position.lotCount > lots.length) {
-      for (let i = lots.length; i < position.lotCount; i++) {
-        context.Lot.deleteUnsafe(createIdForLot({ chainId: position.chainId, positionId: position.contangoPositionId, index: i }))
-      }
+  for (const lot of lots) {
+    if (!openIds.has(lot.id)) {
+      context.Lot.deleteUnsafe(lot.id)
     }
   }
+
+  await Promise.all(openLots.map((lot) => context.Lot.set(lot)))
   context.Position.set({ ...position, lotCount: lots.length })
 }

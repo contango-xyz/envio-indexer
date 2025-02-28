@@ -1,10 +1,13 @@
 import { Lot, TestHelpers } from 'generated'
-import { decodeEventLog, erc20Abi, getAbiItem, Hex, Log, parseAbi, toEventSelector } from 'viem'
+import { decodeEventLog, erc20Abi, getAbiItem, Hex, Log, parseAbi, toEventSelector, zeroAddress } from 'viem'
 import { contangoAbi, iMoneyMarketAbi, maestroAbi, positionNftAbi, simpleSpotExecutorAbi, spotExecutorAbi, strategyBuilderAbi, underlyingPositionFactoryAbi } from '../src/abis'
 import { clients } from '../src/clients'
 import fs from 'fs/promises'
 import path from 'path'
 import { eventStore } from '../src/Store'
+import { wrappedNativeMap } from '../src/utils/constants'
+import { arbitrum } from 'viem/chains'
+import { createIdForPosition } from '../src/utils/ids'
 
 const {
   ContangoProxy,
@@ -14,7 +17,8 @@ const {
   SimpleSpotExecutor,
   UnderlyingPositionFactory,
   MockDb,
-  WETH,
+  WrappedNative,
+  NonStandardWrappedNative,
   StrategyProxy,
   Maestro,
 } = TestHelpers
@@ -96,6 +100,7 @@ const logToEvent = ({ log, from, to, chainId }: { log: Log; from: Hex; to: Hex; 
         })()
         if (!abi) return null
         const event = decodeEventLog({ abi, data, topics })
+        if (!log.blockNumber) throw new Error('Block number not found')
         return {
           ...event,
           srcAddress: log.address,
@@ -107,7 +112,7 @@ const logToEvent = ({ log, from, to, chainId }: { log: Log; from: Hex; to: Hex; 
           logIndex: Number(log.logIndex),
           block: {
             number: Number(log.blockNumber || 0),
-            timestamp: Math.floor(Date.now() / 1000), // don't use timestamp for anything in indexing 
+            timestamp: Number(log.blockNumber), // don't use timestamp for anything in indexing 
             hash: log.blockHash as Hex,
           },
           chainId,
@@ -162,30 +167,41 @@ const getTransactionLogs = async (chainId: number, transactionHash: string): Pro
   }
 }
 
-const runProcessing = async ({ mockDb, positionId, chainId, transactionHash, blockNumber }: { mockDb: ReturnType<typeof MockDb.createMockDb>; positionId: Hex; chainId: number; transactionHash: string; blockNumber: number }) => {
+const runProcessing = async ({ mockDb, positionId, chainId, transactionHash, blockNumber, from, to, owner }: { owner: string; from: string; to: string; mockDb: ReturnType<typeof MockDb.createMockDb>; positionId: Hex; chainId: number; transactionHash: string; blockNumber: number }) => {
   const mockEvent = StrategyProxy.EndStrategy.createMockEvent({
     positionId,
+    owner,
     mockEventData: {
+      srcAddress: '0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd',
       chainId,
       transaction: {
+        from,
+        to,
         hash: transactionHash,
       },
       block: {
         number: blockNumber,
+        timestamp: blockNumber,
       }
-    }
+    },
   })
 
-  return await StrategyProxy.EndStrategy.processEvent({
-    event: mockEvent,
-    mockDb,
-  })
+  try {
+    return await StrategyProxy.EndStrategy.processEvent({
+      event: mockEvent,
+      mockDb,
+    })
+  } catch (e) {
+    console.error('here fucked', e)
+    return mockDb
+  }
 }
 
 export const processTransaction = async (chainId: number, transactionHash: string, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
   const { logs, from, to } = await getTransactionLogs(chainId, transactionHash)
 
   let positionId: Hex | undefined
+  let owner: Hex | undefined
 
   for (const log of logs) {
     const event = logToEvent({ log, from, to, chainId })
@@ -193,14 +209,14 @@ export const processTransaction = async (chainId: number, transactionHash: strin
 
     switch (event.eventName) {
       case 'Deposit': {
-        mockDb = await WETH.Deposit.processEvent({
+        mockDb = await WrappedNative.Deposit.processEvent({
           event: { ...event, params: event.args },
           mockDb
         })
         break
       }
       case 'Withdrawal': {
-        mockDb = await WETH.Withdrawal.processEvent({
+        mockDb = await WrappedNative.Withdrawal.processEvent({
           event: { ...event, params: event.args },
           mockDb
         })
@@ -208,10 +224,20 @@ export const processTransaction = async (chainId: number, transactionHash: strin
       }
       case 'Transfer': {
         if ('value' in event.args) {
-          mockDb = await ERC20.Transfer.processEvent({
-            event: { ...event, params: event.args },
-            mockDb
-          })
+          const isWrappedNative = event.srcAddress.toLowerCase() === wrappedNativeMap[event.chainId as keyof typeof wrappedNativeMap]
+          const [from, to] = [event.args.from, event.args.to].map(a => a.toLowerCase())
+          const isMintOrBurn = from === zeroAddress || to === zeroAddress
+          if (isWrappedNative && event.chainId === arbitrum.id && isMintOrBurn) {
+            mockDb = await NonStandardWrappedNative.Transfer.processEvent({
+              event: { ...event, params: event.args },
+                mockDb
+            })
+          } else {
+            mockDb = await ERC20.Transfer.processEvent({
+              event: { ...event, params: event.args },
+              mockDb
+            })
+          }
         } else {
           mockDb = await PositionNFT.Transfer.processEvent({
             event: { ...event, params: event.args },
@@ -222,6 +248,7 @@ export const processTransaction = async (chainId: number, transactionHash: strin
       }
       case 'PositionUpserted': {
         positionId = event.args.positionId
+        owner = event.args.owner
         mockDb = await ContangoProxy.PositionUpserted.processEvent({
           event: {
             ...event,
@@ -319,8 +346,8 @@ export const processTransaction = async (chainId: number, transactionHash: strin
   }
 
   const { blockNumber } = logs[0]
-  if (positionId && blockNumber !== null) {
-    mockDb = await runProcessing({ mockDb, positionId, chainId, transactionHash, blockNumber: Number(blockNumber) })
+  if (positionId && blockNumber !== null && owner) {
+    mockDb = await runProcessing({ mockDb, positionId, chainId, transactionHash, blockNumber: Number(blockNumber), from, to, owner })
   } else {
     throw new Error('Position ID not found')
   }
@@ -358,6 +385,16 @@ export const getTransactionHashes = async (chainId: number, positionId: Hex) => 
     
     return txHashes
   }
+}
+
+export const processTransactions = async (chainId: number, positionId: Hex, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
+  const transactionHashes = await getTransactionHashes(chainId, positionId)
+
+  for (let i = 0; i < transactionHashes.length; i++) {
+    mockDb = await processTransaction(chainId, transactionHashes[i], mockDb)
+  }
+
+  return mockDb
 }
 
 export const lotsAreTheSame = (lot1: Lot, lot2: Lot) => {
