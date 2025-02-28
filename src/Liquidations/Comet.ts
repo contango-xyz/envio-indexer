@@ -7,11 +7,11 @@ import {
 } from "generated";
 import { eventsReducer } from "../accounting/processEvents";
 import { eventStore } from "../Store";
-import { getBalancesAtBlock, getMarkPrice } from "../utils/common";
+import { getBalancesAtBlock } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { max } from "../utils/math-helpers";
 import { EventType } from "../utils/types";
-import { getLiquidationPenalty, getPositionIdForProxyAddress } from "./common";
+import { getPositionIdForProxyAddress } from "./common";
 
 CometLiquidations.LiquidateComet1.handler(async ({ event, context }) => {
   const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.borrower, context })
@@ -46,12 +46,9 @@ CometLiquidations.LiquidateComet2.handler(async ({ event, context }) => {
       console.error(`no snapshot found for positionId: ${positionId} - chainId: ${event.chainId}`, event)
       return
     }
-    const { position, collateralToken, debtToken } = snapshot
+    const { position } = snapshot
     const step1Event = await getStep1Event(event, context)
-    const [balancesBefore, markPrice] = await Promise.all([
-      getBalancesAtBlock(event.chainId, positionId, event.block.number - 1),
-      getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
-    ])
+    const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
 
     const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
     const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
@@ -67,8 +64,6 @@ CometLiquidations.LiquidateComet2.handler(async ({ event, context }) => {
       transactionHash: event.transaction.hash,
       lendingProfitToSettle,
       debtCostToSettle,
-      liquidationPenalty: getLiquidationPenalty({ collateralToken, collateralDelta: step1Event.collateralAbsorbed, debtDelta: event.params.basePaidOut, markPrice }),
-      markPrice,
     }
     
     context.ContangoLiquidationEvent.set(liquidationEvent)

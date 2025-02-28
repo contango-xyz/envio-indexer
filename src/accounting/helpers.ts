@@ -1,12 +1,20 @@
-import { ContangoSwapEvent, Position, Token } from "generated";
+import { ContangoSwapEvent, Lot, Position, Token } from "generated";
 import { TRADER_CONSTANT, vaultProxy } from "../ERC20";
 import { getMarkPrice } from "../utils/common";
 import { getIMoneyMarketEventsStartBlock } from "../utils/constants";
 import { createTokenId, decodeTokenId } from "../utils/getTokenDetails";
-import { max, mulDiv } from "../utils/math-helpers";
+import { absolute, max, mulDiv } from "../utils/math-helpers";
 import { recordEntries, recordFromEntries } from "../utils/record-utils";
 import { ContangoEvents, EventType, FillItemType, TransferEvent } from "../utils/types";
 import { deriveFillItemValuesFromPositionUpsertedEvent } from "./legacy";
+import { AccountingType } from "./lotsAccounting";
+import { getLiquidationPenalty } from "../Liquidations/common";
+
+export enum PriceSource {
+  TradePrice = 'TradePrice', // regular trades should all have this
+  MarkPrice = 'MarkPrice', // trades that only modify collateral or debt should have this
+  LastLotPrice = 'LastLotPrice', // trades that should have mark price, but getting the mark price failed, should have this
+}
 
 export type PartialFillItem = {
   cashflowSwap?: ContangoSwapEvent;
@@ -15,6 +23,8 @@ export type PartialFillItem = {
 
   swapPrice_long: bigint; // swap price in debt/collateral terms
   swapPrice_short: bigint; // swap price in collateral/debt terms
+
+  priceSource: PriceSource
 
   collateralDelta: bigint;
   debtDelta: bigint;
@@ -40,6 +50,7 @@ const emptyPartialFillItem = (collateralToken: Token): PartialFillItem => ({
   cashflowToken_id: collateralToken.id,
   swapPrice_long: 0n,
   swapPrice_short: 0n,
+  priceSource: PriceSource.TradePrice, // default to trade price
   collateralDelta: 0n,
   debtDelta: 0n,
   debtCostToSettle: 0n,
@@ -100,7 +111,6 @@ const eventsToFillItem = (position: Position, debtToken: Token, collateralToken:
         debtDelta: event.debtDelta,
         lendingProfitToSettle: event.lendingProfitToSettle,
         debtCostToSettle: event.debtCostToSettle,
-        liquidationPenalty: event.liquidationPenalty,
         fillItemType: FillItemType.Liquidated,
       }
     }
@@ -141,14 +151,50 @@ export const eventsToPartialFillItem = (position: Position, debtToken: Token, co
   return events.reduce((acc, event) => eventsToFillItem(position, debtToken, collateralToken, event, acc), emptyPartialFillItem(collateralToken))
 }
 
-export const withMarkPrice = async (position: Position, partialFillItem: PartialFillItem, blockNumber: number, debtToken: Token, collateralToken: Token) => {
+export const calculateFillPrice = ({ fillCost, delta, unit }: { fillCost: bigint; delta: bigint; unit: bigint; }) => {
+  return absolute(mulDiv(fillCost, unit, delta))
+}
+
+type GetMarkPriceParams = {
+  lots: Lot[]
+  chainId: number
+  positionId: string
+  blockNumber: number
+  debtToken: Token
+  collateralToken: Token
+}
+
+export type MarkPriceResult = {
+  price: bigint
+  source: PriceSource
+}
+
+export const markPriceWithFallback = async ({ lots, chainId, positionId, blockNumber, debtToken, collateralToken }: GetMarkPriceParams): Promise<MarkPriceResult> => {
+  const markPrice = await getMarkPrice({ chainId, positionId, blockNumber, debtToken })
+  if (markPrice) return { price: markPrice, source: PriceSource.MarkPrice }
+
+  const mostRecentLongLot = lots.filter(lot => lot.accountingType === AccountingType.Long).sort((a, b) => Number(b.createdAtBlock - a.createdAtBlock))[0]
+  // if there are no long lots, we can't run the code below
+  if (!mostRecentLongLot) throw new Error('Unable to set prices of fill to either mark price or last lot price because there are no long lots!')
+
+  // if mark price is 0, we fall back to using the fill price of the most recent lot (the getMarkPrice function has a catch and returns 0n if it fails)
+  console.log(`Unable to get mark price, using last lot price as fallback for ${positionId} on chain ${chainId}`)
+  return { price: calculateFillPrice({ fillCost: mostRecentLongLot.grossOpenCost, delta: mostRecentLongLot.grossSize, unit: collateralToken.unit }), source: PriceSource.LastLotPrice }
+}
+
+export const withMarkPrice = async ({ position, partialFillItem, blockNumber, debtToken, collateralToken, lots }: { lots: Lot[]; position: Position; partialFillItem: PartialFillItem; blockNumber: number; debtToken: Token; collateralToken: Token; }) => {
   // if the tradePrice is 0, we need to get the markPrice
   if (partialFillItem.swapPrice_long === 0n || partialFillItem.swapPrice_short === 0n) {
-    const markPrice = await getMarkPrice({ chainId: position.chainId, positionId: position.contangoPositionId, blockNumber, debtToken })
-    partialFillItem.swapPrice_long = markPrice
-    partialFillItem.swapPrice_short = mulDiv(debtToken.unit, collateralToken.unit, markPrice)
+    const { price, source } = await markPriceWithFallback({ lots, chainId: position.chainId, positionId: position.contangoPositionId, blockNumber, debtToken, collateralToken })
+    partialFillItem.swapPrice_long = price
+    partialFillItem.swapPrice_short = mulDiv(debtToken.unit, collateralToken.unit, price)
+    partialFillItem.priceSource = source
+
+    if (partialFillItem.fillItemType === FillItemType.Liquidated) {
+      partialFillItem.liquidationPenalty = getLiquidationPenalty({ collateralToken, collateralDelta: partialFillItem.collateralDelta, debtDelta: partialFillItem.debtDelta, referencePrice: price })
+    }
   }
-  return partialFillItem
+  return partialFillItem // the fill item will have the price source set to TradePrice by default, so we don't need to assign it here
 }
 
 export const calculateDust = (events: ContangoEvents[], partialFillItem: PartialFillItem) => {
@@ -229,6 +275,7 @@ export const calculateCashflowsAndFee = ({ partialFillItem, debtToken, collatera
       cashflowBase += cashflow
       cashflowQuote += baseToQuote(cashflow)
     } else {
+      console.log('cashflowToken_id', cashflowToken_id)
       // if we're in this block, something has gone wrong because the if statement above should have caught all the cases
       // if you see this error, the casfhlow swap is not being picked up and added to the fillItem before this function is called
       throw new Error('Invalid cashflow token id')

@@ -11,12 +11,12 @@ import { GenericEvent } from "../accounting/lotsAccounting";
 import { eventsReducer } from "../accounting/processEvents";
 import { clients } from "../clients";
 import { eventStore } from "../Store";
-import { getBalancesAtBlock, getMarkPrice } from "../utils/common";
+import { getBalancesAtBlock } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { positionIdMapper } from "../utils/mappers";
 import { max, mulDiv } from "../utils/math-helpers";
 import { EventType } from "../utils/types";
-import { getLiquidationPenalty, getPositionIdForProxyAddress } from "./common";
+import { getPositionIdForProxyAddress } from "./common";
 
 // Aave
 export function getLiquidationBonus(data: bigint): bigint {
@@ -91,11 +91,9 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
       console.error(`no snapshot found for positionId: ${positionId} - chainId: ${event.chainId}`, event)
       return
     }
-    const { position, debtToken, collateralToken } = snapshot
-    const [balancesBefore, markPrice] = await Promise.all([
-      getBalancesAtBlock(event.chainId, positionId, event.block.number - 1),
-      getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
-    ])
+    const { position } = snapshot
+    const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
+
     const aaveLiquidationEvent = await processAaveLiquidationEvents({
       chainId: event.chainId,
       positionId,
@@ -118,13 +116,6 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
         blockTimestamp: event.block.timestamp,
         debtCostToSettle,
         transactionHash: event.transaction.hash,
-        liquidationPenalty: getLiquidationPenalty({
-          collateralToken,
-          collateralDelta: aaveLiquidationEvent.collateralDelta,
-          debtDelta: aaveLiquidationEvent.debtDelta,
-          markPrice,
-        }),
-        markPrice,
       }
       context.ContangoLiquidationEvent.set(liquidationEvent)
       eventStore.addLog({ event: { ...event, params: { positionId } }, contangoEvent: { ...liquidationEvent, eventType: EventType.LIQUIDATION } })

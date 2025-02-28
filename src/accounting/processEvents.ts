@@ -9,15 +9,8 @@ import { Mutable } from "viem";
 import { eventStore, PositionSnapshot } from "../Store";
 import { createFillItemId, createIdForLot, createIdForPosition } from "../utils/ids";
 import { ContangoEvents, EventType, FillItemType, MigratedEvent } from "../utils/types";
-import { calculateCashflowsAndFee, calculateDust, eventsToPartialFillItem, withMarkPrice } from "./helpers";
-import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCostDelta, handleCloseSize, initialiseLot, savePosition } from "./lotsAccounting";
-import { absolute, max, mulDiv } from "../utils/math-helpers";
-import { getMarkPrice } from "../utils/common";
-import { vaultProxy } from "../ERC20";
-
-const calculateFillPrice = ({ fillCost, delta, unit }: { fillCost: bigint; delta: bigint; unit: bigint; }) => {
-  return absolute(mulDiv(fillCost, unit, delta))
-}
+import { calculateCashflowsAndFee, calculateDust, calculateFillPrice, eventsToPartialFillItem, withMarkPrice } from "./helpers";
+import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCloseSize, initialiseLot, savePosition } from "./lotsAccounting";
 
 export const processEvents = async (
   {
@@ -39,7 +32,7 @@ export const processEvents = async (
   const { block: { number: blockNumber }, transaction: { hash: transactionHash } } = genericEvent
 
   // create the basic (partial) fillItem
-  const partialFillItem = await withMarkPrice(positionSnapshot, eventsToPartialFillItem(positionSnapshot, debtToken, collateralToken, events), blockNumber, debtToken, collateralToken)
+  const partialFillItem = await withMarkPrice({ lots: lotsSnapshot, position: positionSnapshot, partialFillItem: eventsToPartialFillItem(positionSnapshot, debtToken, collateralToken, events), blockNumber, debtToken, collateralToken })
 
   // dust left in the vault
   const dustRecord = calculateDust(events, partialFillItem)
@@ -80,6 +73,7 @@ export const processEvents = async (
     liquidationPenalty: partialFillItem.liquidationPenalty,
     swapPrice_long: partialFillItem.swapPrice_long,
     swapPrice_short: partialFillItem.swapPrice_short,
+    priceSource: partialFillItem.priceSource,
     fillCost_long,
     fillCost_short,
     fillPrice_long,
@@ -281,6 +275,6 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
     await savePosition({ position: result.position, lots: [...result.lots.longLots, ...result.lots.shortLots], context })
   } catch (e) {
     console.error('error processing events', e)
-    return null
+    throw e
   }
 }

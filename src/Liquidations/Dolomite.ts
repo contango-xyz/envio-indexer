@@ -1,14 +1,11 @@
-import {
-  ContangoLiquidationEvent,
-  DolomiteLiquidations
-} from "generated";
+import { ContangoLiquidationEvent, DolomiteLiquidations } from "generated";
 import { eventsReducer } from "../accounting/processEvents";
 import { eventStore } from "../Store";
-import { getBalancesAtBlock, getMarkPrice } from "../utils/common";
+import { getBalancesAtBlock } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { max } from "../utils/math-helpers";
 import { EventType } from "../utils/types";
-import { getLiquidationPenalty, getPositionIdForProxyAddress } from "./common";
+import { getPositionIdForProxyAddress } from "./common";
 
 DolomiteLiquidations.LiquidateDolomite.handler(async ({ event, context }) => {
   const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.solidAccountOwner, context })
@@ -20,11 +17,8 @@ DolomiteLiquidations.LiquidateDolomite.handler(async ({ event, context }) => {
       return
     }
 
-    const { position, collateralToken, debtToken } = snapshot
-    const [balancesBefore, markPrice] = await Promise.all([
-      getBalancesAtBlock(event.chainId, positionId, event.block.number - 1),
-      getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
-    ])
+    const { position } = snapshot
+    const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
 
     const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
     const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
@@ -40,8 +34,6 @@ DolomiteLiquidations.LiquidateDolomite.handler(async ({ event, context }) => {
       transactionHash: event.transaction.hash,
       lendingProfitToSettle,
       debtCostToSettle,
-      liquidationPenalty: getLiquidationPenalty({ collateralToken, collateralDelta: event.params.liquidHeldUpdateValue, debtDelta: event.params.liquidOwedUpdateValue, markPrice }),
-      markPrice,
     }
     context.ContangoLiquidationEvent.set(liquidationEvent)
     eventStore.addLog({ event: { ...event, params: { positionId } }, contangoEvent: { ...liquidationEvent, eventType: EventType.LIQUIDATION } })
