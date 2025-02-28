@@ -50,6 +50,7 @@ type FillItem {
 
   swapPrice_long: BigInt! # swap price in debt ccy terms
   swapPrice_short: BigInt! # swap price in collateral ccy terms
+  priceSource: String! # PriceSource
 
   fillCost_long: BigInt! # actual cost paid. dividing this by collateral delta will give the true fill price (including any flashloan fees etc)
   fillCost_short: BigInt! # actual cost paid. dividing this by debt delta will give the true fill price (including any flashloan fees etc)
@@ -276,8 +277,6 @@ type ContangoLiquidationEvent {
   debtDelta: BigInt!
   lendingProfitToSettle: BigInt!
   debtCostToSettle: BigInt!
-  liquidationPenalty: BigInt!
-  markPrice: BigInt!
 }
 
 type ContangoInstrumentCreatedEvent {

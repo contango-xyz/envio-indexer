@@ -3,6 +3,7 @@ import { Token, handlerContext } from "generated";
 import * as path from "path";
 import { ReturnPromiseType } from "./types";
 import { Balances } from "./common";
+import * as lockfile from 'proper-lockfile';
 
 export const CacheCategory = {
   Token: "token",
@@ -56,6 +57,7 @@ const reviver = (_key: string, value: any) => {
 
 export class Entry<T extends Shape> {
   private memory: T = {} as T;
+  private lockRelease: (() => Promise<void>) | null = null;
 
   static encoding = "utf8" as const;
   static folder = "./.cache" as const;
@@ -71,32 +73,62 @@ export class Entry<T extends Shape> {
     this.load();
   }
 
-  public read<K extends keyof T>(key: K): T[K] {
-    const memory = this.memory || {};
-    return memory[key] as T[K];
+  private async acquireLock(): Promise<void> {
+    try {
+      this.lockRelease = await lockfile.lock(this.file, { retries: 10 })
+    } catch (error) {
+      console.error('Failed to acquire lock:', error);
+      throw error;
+    }
   }
 
-  public load() {
+  private async releaseLock(): Promise<void> {
+    if (this.lockRelease) {
+      await this.lockRelease();
+      this.lockRelease = null;
+    }
+  }
+
+  public async load() {
     try {
+      await this.acquireLock();
       const data = fs.readFileSync(this.file, Entry.encoding);
       this.memory = JSON.parse(data, reviver) as T;
     } catch (error) {
       console.error(error);
       this.memory = {} as T;
+    } finally {
+      await this.releaseLock();
     }
   }
 
-  public add<N extends T>(fields: N) {
-    if (!this.memory || Object.values(this.memory).length === 0) {
-      this.memory = fields;
-    } else {
-      Object.entries(fields).forEach(([key, value]) => {
-        if (!this.memory[key]) {
-          this.memory[key] = value;
-        }
-      });
+  public read<K extends keyof T>(key: K): T[K] {
+    const memory = this.memory || {};
+    return memory[key] as T[K];
+  }
+
+  public async add<N extends T>(fields: N) {
+    try {
+      await this.acquireLock();
+      
+      // Reload the latest state before making changes
+      const data = fs.readFileSync(this.file, Entry.encoding);
+      this.memory = JSON.parse(data, reviver) as T;
+
+      if (!this.memory || Object.values(this.memory).length === 0) {
+        this.memory = fields;
+      } else {
+        Object.entries(fields).forEach(([key, value]) => {
+          if (!this.memory[key]) {
+            this.memory[key] = value;
+          }
+        });
+      }
+      
+      await this.publish();
+    } finally {
+      await this.releaseLock();
     }
-    this.publish();
   }
 
   private preflight() {
@@ -109,12 +141,13 @@ export class Entry<T extends Shape> {
     }
   }
 
-  private publish() {
+  private async publish() {
     const prepared = JSON.stringify(this.memory, replacer);
     try {
       fs.writeFileSync(this.file, prepared);
     } catch (error) {
       console.error(error);
+      throw error;
     }
   }
 
@@ -122,3 +155,4 @@ export class Entry<T extends Shape> {
     return path.join(Entry.folder, key.toLowerCase().concat(".json"));
   }
 }
+
