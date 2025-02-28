@@ -259,7 +259,7 @@ networks:
   - name: SiloLiquidations
   - name: CometLiquidations
   - name: DolomiteLiquidations
-- id: 53452 # Scroll
+- id: 534352 # Scroll
   start_block: 6373860
   contracts:
   - name: ContangoProxy
