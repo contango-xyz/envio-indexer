@@ -29,18 +29,63 @@ type ShapeBalances = Record<string, Balances>;
 type Shape = ShapeToken | ShapeInstrument | ShapeTokenPair | ShapeBalances | ShapeMarkPrice;
 
 export class Cache {
-  static async init<C extends CacheCategory>(
-{ category, chainId }: { category: C; chainId: number | string | bigint; }  ) {
+  // Store instances by key (category-chainId)
+  private static instances: Map<string, Entry<any>> = new Map();
+
+  static async init<C extends CacheCategory>({
+    category,
+    chainId,
+  }: {
+    category: C;
+    chainId: number | string | bigint;
+  }) {
     if (!Object.values(CacheCategory).find((c) => c === category)) {
       throw new Error("Unsupported cache category");
     }
 
-    type S = C extends "token" ? ShapeToken : C extends "instrument" ? ShapeInstrument : C extends "token-pair" ? ShapeTokenPair : C extends "balances" ? ShapeBalances : C extends "mark-price" ? ShapeMarkPrice : never
-    const entry = new Entry<S>(`${category}-${chainId.toString()}`);
-    await entry.load()
+    // Create a unique key for the cache instance
+    const key = `${category}-${chainId.toString()}`;
+
+    // Return the existing instance if available
+    if (Cache.instances.has(key)) {
+      return Cache.instances.get(key) as Entry<
+        C extends "token"
+          ? ShapeToken
+          : C extends "instrument"
+          ? ShapeInstrument
+          : C extends "token-pair"
+          ? ShapeTokenPair
+          : C extends "balances"
+          ? ShapeBalances
+          : C extends "mark-price"
+          ? ShapeMarkPrice
+          : never
+      >;
+    }
+
+    // Otherwise, create a new instance
+    type S = C extends "token"
+      ? ShapeToken
+      : C extends "instrument"
+      ? ShapeInstrument
+      : C extends "token-pair"
+      ? ShapeTokenPair
+      : C extends "balances"
+      ? ShapeBalances
+      : C extends "mark-price"
+      ? ShapeMarkPrice
+      : never;
+      
+    const entry = new Entry<S>(key);
+    await entry.load();
+
+    // Cache the new instance
+    Cache.instances.set(key, entry);
+
     return entry;
   }
 }
+
 
 const replacer = (_key: string, value: any) => {
   if (typeof value === 'bigint') {
