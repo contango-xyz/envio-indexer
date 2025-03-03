@@ -142,18 +142,16 @@ export const processEvents = async (
     shortCost: positionSnapshot.shortCost + fillItem.fillCost_short,
   }
 
-  if (newPosition.collateral <= 0n) fillItem.fillItemType = FillItemType.Closed
-  if (positionSnapshot.collateral === 0n) {
-    if (fillItem.fillItemType === FillItemType.Liquidated) fillItem.fillItemType = FillItemType.ClosedByLiquidation
-    else fillItem.fillItemType = FillItemType.Closed
-  }
+  if (positionSnapshot.collateral === 0n) fillItem.fillItemType = FillItemType.Opened
+  else if (newPosition.collateral <= 0n) fillItem.fillItemType = partialFillItem.fillItemType === FillItemType.Liquidated ? FillItemType.ClosedByLiquidation : FillItemType.Closed
+  else fillItem.fillItemType = FillItemType.Modified
 
   // return the new position, fillItem, and lots
   return { position: newPosition, fillItem, lots: { longLots, shortLots } }
 }
 
 const saveFillItem = async (fillItem: FillItem, context: handlerContext) => {
-  if (fillItem.referencePriceSource === ReferencePriceSource.None) {
+  if (fillItem.referencePriceSource === ReferencePriceSource.None && fillItem.cashflow !== 0n) {
     throw new Error('Fill item has no reference price source')
   }
   context.FillItem.set(fillItem)

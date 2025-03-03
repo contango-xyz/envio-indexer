@@ -512,6 +512,37 @@ describe('indexer tests', () => {
     await highLevelInvariants(id)
   })
 
+  it('Short ETH/USDC - 0x leverage', async function() {
+    this.timeout(30000)
+    const positionId = '0x5553444357455448000000000000000001ffffffff000000000000000000005c'
+    const id = createIdForPosition({ chainId: 42161, positionId })
+    const transactionHashes = await getTransactionHashes(id)
+
+    for (let i = 0; i < transactionHashes.length; i++) {
+      mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+      const fillItems = mockDb.entities.FillItem.getAll()
+      const lots = mockDb.entities.Lot.getAll()
+      const position = mockDb.entities.Position.get(id)
+      if (!position) throw new Error('Position not found in test!')
+      const fillItem = fillItems[i]
+
+      if (i === 0) {
+        // this position has no debt, and hence no short lots
+        expect(lots.length).to.equal(1)
+        expect(lots[0].accountingType).to.equal(AccountingType.Long)
+        expect(fillItem.fillItemType).to.equal(FillItemType.Opened)
+      } else if (i === 1) {
+        // this position has debt, and hence a short lot
+        expect(position.realisedPnl_long).to.not.equal(0n)
+        expect(position.realisedPnl_short).to.equal(0n)
+        expect(fillItem.realisedPnl_short).to.equal(0n)
+        expect(fillItem.fillCost_short).to.equal(155n) // precision error
+        expect(fillItem.fillPrice_short).to.equal(0n)
+        expect(fillItem.fillItemType).to.equal(FillItemType.Closed)
+      }
+    }
+  })
+
   it('ARB/DAI Lodestar - position with multiple liquidations', async function() {
     this.timeout(30000)
     const id = createIdForPosition({ chainId: 42161, positionId: '0x5745544857584441490000000000000007ffffffff0000000000000000000001' })

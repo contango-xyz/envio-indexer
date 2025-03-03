@@ -1,14 +1,14 @@
 import { ContangoSwapEvent, Lot, Position, Token } from "generated";
-import { TRADER_CONSTANT, vaultProxy } from "../ERC20";
+import { TRADER_CONSTANT } from "../ERC20";
+import { getLiquidationPenalty } from "../Liquidations/common";
 import { getMarkPrice } from "../utils/common";
-import { getIMoneyMarketEventsStartBlock } from "../utils/constants";
+import { ADDRESSES, getIMoneyMarketEventsStartBlock } from "../utils/constants";
 import { createTokenId, decodeTokenId } from "../utils/getTokenDetails";
 import { absolute, max, mulDiv } from "../utils/math-helpers";
 import { recordEntries, recordFromEntries } from "../utils/record-utils";
 import { ContangoEvents, EventType, FillItemType, TransferEvent } from "../utils/types";
 import { deriveFillItemValuesFromPositionUpsertedEvent } from "./legacy";
 import { AccountingType } from "./lotsAccounting";
-import { getLiquidationPenalty } from "../Liquidations/common";
 
 export enum ReferencePriceSource {
   SwapPrice = 'SwapPrice', // if there's a base<=>quote swap, we will use that value as the reference price
@@ -185,15 +185,23 @@ export const markPriceWithFallback = async ({ lots, chainId, positionId, blockNu
 }
 
 export const withFallbackReferencePrice = async ({ position, partialFillItem, blockNumber, debtToken, collateralToken, lots }: { lots: Lot[]; position: Position; partialFillItem: PartialFillItem; blockNumber: number; debtToken: Token; collateralToken: Token; }) => {
-  // if the tradePrice is 0, we need to get the markPrice
   if (partialFillItem.referencePrice_long === 0n || partialFillItem.referencePrice_short === 0n) {
-    const { price, source } = await markPriceWithFallback({ lots, chainId: position.chainId, positionId: position.contangoPositionId, blockNumber, debtToken, collateralToken })
-    partialFillItem.referencePrice_long = price
-    partialFillItem.referencePrice_short = mulDiv(debtToken.unit, collateralToken.unit, price)
-    partialFillItem.referencePriceSource = source
+    // if we're in this block, it means that there was no swap event found in the transaction, so we need to populate a fallback price
+    // we only NEED to do this if there is some sort of user cashflow in the transaction. If there's no user cashflow, we can get away with not populating the reference price (it won't fuck up the accounting if we don't populate it)
 
-    if (partialFillItem.fillItemType === FillItemType.Liquidated) {
-      partialFillItem.liquidationPenalty = getLiquidationPenalty({ collateralToken, collateralDelta: partialFillItem.collateralDelta, debtDelta: partialFillItem.debtDelta, referencePrice: price })
+    try {
+      const { price, source } = await markPriceWithFallback({ lots, chainId: position.chainId, positionId: position.contangoPositionId, blockNumber, debtToken, collateralToken })
+      partialFillItem.referencePrice_long = price
+      partialFillItem.referencePrice_short = mulDiv(debtToken.unit, collateralToken.unit, price)
+      partialFillItem.referencePriceSource = source
+    } catch (e) {
+      if (partialFillItem.cashflow !== 0n) {
+        throw new Error('Unable to get reference price for fill item')
+      }
+    }
+
+    if (partialFillItem.fillItemType === FillItemType.Liquidated && partialFillItem.referencePrice_long !== 0n) {
+      partialFillItem.liquidationPenalty = getLiquidationPenalty({ collateralToken, collateralDelta: partialFillItem.collateralDelta, debtDelta: partialFillItem.debtDelta, referencePrice: partialFillItem.referencePrice_long })
     }
   }
   return partialFillItem
@@ -209,8 +217,8 @@ export const calculateDust = (events: ContangoEvents[], partialFillItem: Partial
 
   const record = events
     .filter((e): e is TransferEvent => e.eventType === EventType.TRANSFER) // get only the transfer events
-    .filter(e => ([e.to, e.from].includes(vaultProxy))) // only transfers to/from the vault
-    .map(e => e.to === vaultProxy ? e : { ...e, value: e.value * -1n })
+    .filter(e => ([e.to, e.from].includes(ADDRESSES.vaultProxy))) // only transfers to/from the vault
+    .map(e => e.to === ADDRESSES.vaultProxy ? e : { ...e, value: e.value * -1n })
     .reduce((acc, e) => {
       const prev = acc[e.srcAddress] ?? 0n
       return { ...acc, [e.srcAddress]: prev + e.value }

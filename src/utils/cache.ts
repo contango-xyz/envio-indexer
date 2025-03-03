@@ -29,7 +29,7 @@ type ShapeBalances = Record<string, Balances>;
 type Shape = ShapeToken | ShapeInstrument | ShapeTokenPair | ShapeBalances | ShapeMarkPrice;
 
 export class Cache {
-  static init<C extends CacheCategory>(
+  static async init<C extends CacheCategory>(
 { category, chainId }: { category: C; chainId: number | string | bigint; }  ) {
     if (!Object.values(CacheCategory).find((c) => c === category)) {
       throw new Error("Unsupported cache category");
@@ -37,6 +37,7 @@ export class Cache {
 
     type S = C extends "token" ? ShapeToken : C extends "instrument" ? ShapeInstrument : C extends "token-pair" ? ShapeTokenPair : C extends "balances" ? ShapeBalances : C extends "mark-price" ? ShapeMarkPrice : never
     const entry = new Entry<S>(`${category}-${chainId.toString()}`);
+    await entry.load()
     return entry;
   }
 }
@@ -68,9 +69,6 @@ export class Entry<T extends Shape> {
   constructor(key: string) {
     this.key = key;
     this.file = Entry.resolve(key);
-
-    this.preflight();
-    this.load();
   }
 
   private async acquireLock(): Promise<void> {
@@ -91,6 +89,7 @@ export class Entry<T extends Shape> {
 
   public async load() {
     try {
+      this.preflight()
       await this.acquireLock();
       const data = fs.readFileSync(this.file, Entry.encoding);
       this.memory = JSON.parse(data, reviver) as T;

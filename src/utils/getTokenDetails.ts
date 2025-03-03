@@ -31,7 +31,7 @@ const saveTokenIfDisplaySymbolHasChanged = (token: Token, context: handlerContex
 }
 
 const getTokenDetails = async (address: string, chainId: number) => {
-  const cache = Cache.init({ category: CacheCategory.Token, chainId });
+  const cache = await Cache.init({ category: CacheCategory.Token, chainId });
   const token = cache.read(address);
 
   if (token) return token
