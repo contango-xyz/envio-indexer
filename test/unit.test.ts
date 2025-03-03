@@ -54,6 +54,11 @@ describe('indexer tests', () => {
 
     expect((Number(position.realisedPnl_long) / Number(debtToken.unit)).toFixed(3)).to.equal((Number(position.cashflowQuote) / Number(debtToken.unit) * -1).toFixed(3))
     expect((Number(position.realisedPnl_short) / Number(collateralToken.unit)).toFixed(3)).to.equal((Number(position.cashflowBase) / Number(collateralToken.unit) * -1).toFixed(3))
+
+    // this function (highLevelInvariants) is only called when the position has been closed
+    // any closed position should have realised pnl
+    expect(position.realisedPnl_long).to.not.equal(0n)
+    expect(position.realisedPnl_short).to.not.equal(0n)
   }
 
   it('RDNT/ETH short - Chain: Arbitrum - Number: #20498', async function() {
@@ -494,6 +499,19 @@ describe('indexer tests', () => {
     expect(Number(newPosition.collateral)).to.be.greaterThan(0)
   })
 
+  it('Position managed through a SAFE', async function() {
+    this.timeout(30000)
+    const positionId = '0x7344414955534443000000000000000001ffffffff00000000000000000004b5'
+    const id = createIdForPosition({ chainId: 100, positionId })
+    const transactionHashes = await getTransactionHashes(id)
+
+    for (let i = 0; i < transactionHashes.length; i++) {
+      mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+    }
+
+    await highLevelInvariants(id)
+  })
+
   it('ARB/DAI Lodestar - position with multiple liquidations', async function() {
     this.timeout(30000)
     const id = createIdForPosition({ chainId: 42161, positionId: '0x5745544857584441490000000000000007ffffffff0000000000000000000001' })
@@ -506,10 +524,9 @@ describe('indexer tests', () => {
       const fillItems = mockDb.entities.FillItem.getAll()
       const fillItem = fillItems[i]
     }
-
   })
 
-  it('ARB/USDC long - Chain: Arbitrum - Number: #5488 - REALISED PNL IS FUCKED', async function() {
+  it('ARB/USDC long - Chain: Arbitrum - Number: #5488', async function() {
     this.timeout(30000)
     const id = createIdForPosition({ chainId: 42161, positionId: '0x415242555344432e6e0000000000000001ffffffff0200000000000000001570' })
     const transactionHashes = await getTransactionHashes(id)

@@ -8,12 +8,13 @@ import {
 import { Hex, toHex, zeroAddress } from "viem";
 import { createPosition } from "./accounting/positions";
 import { eventStore } from "./Store";
-import { createInstrumentId, getPositionSafe } from "./utils/common";
+import { createInstrumentId, getPosition, getPositionSafe } from "./utils/common";
 import { getOrCreateToken } from "./utils/getTokenDetails";
 import { createEventId, createFillItemId } from "./utils/ids";
 import { strategyContractsAddresses } from "./utils/previousContractAddresses";
 import { EventType, PositionUpsertedEvent } from "./utils/types";
 
+// re-run indexing again
 ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
   const contangoEvent: PositionUpsertedEvent = {
     ...event.params,
@@ -41,7 +42,6 @@ PositionNFT.Transfer.handler(async ({ event, context }) => {
     // if the transfer is to the strategy builder, we don't update the owner.
     // This is important because when we evaluate cashflows, we need to know the cashflows of the actual owner and not the "temporary" owner
     const isTransferToStrategyBuilder = strategyContractsAddresses(event.chainId).has(to)
-
     const position = await getPositionSafe({ chainId: event.chainId, positionId, context })
 
     if (position) {
@@ -54,6 +54,9 @@ PositionNFT.Transfer.handler(async ({ event, context }) => {
       return;
       // if no position exists yet, it means we're in a migration transaction and it'll be handled by the eventsReducer()
     }
+  } else {
+    // transfer from zero address means the NFT is being created, and hence a position is being created
+    await createPosition({ ...event, positionId, owner: to, proxyAddress: zeroAddress, context })
   }
 });
 
@@ -61,8 +64,9 @@ export const createUnderlyingPositionId = ({ chainId, proxyAddress }: { chainId:
 
 UnderlyingPositionFactory.UnderlyingPositionCreated.handler(async ({ event, context }) => {
   if (!event.transaction.from) throw new Error('UnderlyingPositionCreated event has no from address')
-  const [owner, proxyAddress] = [event.transaction.from, event.params.account].map(address => address.toLowerCase())
-  await createPosition({ ...event, positionId: event.params.positionId, owner, proxyAddress, context })
+  const proxyAddress = event.params.account.toLowerCase()
+  const position = await getPosition({ chainId: event.chainId, positionId: event.params.positionId, context })
+  context.Position.set({ ...position, proxyAddress })
 
   const underlyingPosition: UnderlyingPositionFactory_UnderlyingPositionCreated = {
     id: createUnderlyingPositionId({ chainId: event.chainId, proxyAddress }),
@@ -74,6 +78,7 @@ UnderlyingPositionFactory.UnderlyingPositionCreated.handler(async ({ event, cont
     transactionHash: event.transaction.hash,
   }
 
+  // create this mapping for us to look up proxy->positionId->position when processing liquidations
   context.UnderlyingPositionFactory_UnderlyingPositionCreated.set(underlyingPosition)
 });
 
