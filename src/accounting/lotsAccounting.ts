@@ -152,7 +152,7 @@ export const loadLots = async ({ position, context }: { position: Position; cont
 
 }
 
-export const savePosition = async ({ position, lots, context }: { position: Position; lots: Lot[]; context: handlerContext }) => {
+export const saveLots = async ({ lots, context }: { lots: Lot[]; context: handlerContext }) => {
   // Save all lots in parallel
   const openLots = lots.filter((lot) => !lot.closedAtBlock).map((lot, idx) => ({ ...lot, id: createIdForLot({ chainId: lot.chainId, positionId: lot.contangoPositionId, index: idx }) }))
   const openIds = new Set<Lot['id']>(openLots.map(lot => lot.id))
@@ -164,5 +164,9 @@ export const savePosition = async ({ position, lots, context }: { position: Posi
   }
 
   await Promise.all(openLots.map((lot) => context.Lot.set(lot)))
+}
+
+export const savePosition = async ({ position, lots, context }: { position: Position; lots: Lot[]; context: handlerContext }) => {
+  await saveLots({ lots, context })
   context.Position.set({ ...position, lotCount: lots.length })
 }

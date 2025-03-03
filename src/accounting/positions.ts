@@ -36,7 +36,7 @@ export const createPosition = async (
     collateral: 0n,
     accruedLendingProfit: 0n,
     debt: 0n,
-    accruedInterest: 0n,
+    accruedDebtCost: 0n,
     fees_long: 0n,
     fees_short: 0n,
     cashflowBase: 0n,

@@ -1,6 +1,6 @@
 import { ContangoPositionUpsertedEvent, Position, Token } from "generated";
 import { mulDiv } from "../utils/math-helpers";
-import { PartialFillItem } from "./helpers";
+import { PartialFillItem, ReferencePriceSource } from "./helpers";
 
 export enum CashflowCurrency {
   None,
@@ -27,8 +27,8 @@ export const deriveFillItemValuesFromPositionUpsertedEvent = (
 
   const newFillItem = { ...fillItem }
 
-  newFillItem.swapPrice_long = price || newFillItem.swapPrice_long
-  newFillItem.swapPrice_short = mulDiv(collateralToken.unit, debtToken.unit, price) || newFillItem.swapPrice_short
+  newFillItem.referencePrice_long = price || newFillItem.referencePrice_long
+  newFillItem.referencePrice_short = mulDiv(collateralToken.unit, debtToken.unit, price) || newFillItem.referencePrice_short
   newFillItem.collateralDelta += quantityDelta
   
   let accruedLendingProfit = 0n
@@ -69,6 +69,9 @@ export const deriveFillItemValuesFromPositionUpsertedEvent = (
   newFillItem.debtDelta += debtDelta
   newFillItem.lendingProfitToSettle = accruedLendingProfit
   newFillItem.debtCostToSettle = accruedInterest
-  
+  if (newFillItem.referencePrice_long !== 0n && newFillItem.referencePrice_short !== 0n) {
+    newFillItem.referencePriceSource = ReferencePriceSource.SwapPrice
+  }
+
   return newFillItem
 };

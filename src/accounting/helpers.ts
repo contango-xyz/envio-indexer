@@ -10,10 +10,11 @@ import { deriveFillItemValuesFromPositionUpsertedEvent } from "./legacy";
 import { AccountingType } from "./lotsAccounting";
 import { getLiquidationPenalty } from "../Liquidations/common";
 
-export enum PriceSource {
-  TradePrice = 'TradePrice', // regular trades should all have this
-  MarkPrice = 'MarkPrice', // trades that only modify collateral or debt should have this
+export enum ReferencePriceSource {
+  SwapPrice = 'SwapPrice', // if there's a base<=>quote swap, we will use that value as the reference price
+  MarkPrice = 'MarkPrice', // if there's no swap, we use the mark price (oracle price) as the reference price. trades that modify collateral|debt ONLY should have this
   LastLotPrice = 'LastLotPrice', // trades that should have mark price, but getting the mark price failed, should have this
+  None = 'None', // We default to this, and then error if attempting to save a fill item with no reference price
 }
 
 export type PartialFillItem = {
@@ -21,10 +22,9 @@ export type PartialFillItem = {
   cashflow: bigint;
   cashflowToken_id: string;
 
-  swapPrice_long: bigint; // swap price in debt/collateral terms
-  swapPrice_short: bigint; // swap price in collateral/debt terms
-
-  priceSource: PriceSource
+  referencePrice_long: bigint; // swap price in debt/collateral terms
+  referencePrice_short: bigint; // swap price in collateral/debt terms
+  referencePriceSource: ReferencePriceSource
 
   collateralDelta: bigint;
   debtDelta: bigint;
@@ -48,9 +48,9 @@ export type PartialFillItem = {
 const emptyPartialFillItem = (collateralToken: Token): PartialFillItem => ({
   cashflow: 0n,
   cashflowToken_id: collateralToken.id,
-  swapPrice_long: 0n,
-  swapPrice_short: 0n,
-  priceSource: PriceSource.TradePrice, // default to trade price
+  referencePrice_long: 0n,
+  referencePrice_short: 0n,
+  referencePriceSource: ReferencePriceSource.None, // default to none
   collateralDelta: 0n,
   debtDelta: 0n,
   debtCostToSettle: 0n,
@@ -66,7 +66,7 @@ const eventsToFillItem = (position: Position, debtToken: Token, collateralToken:
   switch (event.eventType) {
     case EventType.DEBT: {
       if (!existingFillItem.debtCostToSettle) {
-        const debtCostToSettle = max(event.balanceBefore - (position.debt + position.accruedInterest), 0n)
+        const debtCostToSettle = max(event.balanceBefore - (position.debt + position.accruedDebtCost), 0n)
         return { ...existingFillItem, debtCostToSettle, debtDelta: existingFillItem.debtDelta + event.debtDelta }
       } else return { ...existingFillItem, debtDelta: existingFillItem.debtDelta + event.debtDelta }
     }
@@ -82,16 +82,18 @@ const eventsToFillItem = (position: Position, debtToken: Token, collateralToken:
       if (tokenIn.address === debtToken.address && tokenOut.address === collateralToken.address) {
         return {
           ...existingFillItem,
-          swapPrice_long: mulDiv(event.amountIn, collateralToken.unit, event.amountOut),
-          swapPrice_short: mulDiv(event.amountOut, debtToken.unit, event.amountIn),
+          referencePrice_long: mulDiv(event.amountIn, collateralToken.unit, event.amountOut),
+          referencePrice_short: mulDiv(event.amountOut, debtToken.unit, event.amountIn),
+          referencePriceSource: ReferencePriceSource.SwapPrice,
         }
       }
 
       if (tokenIn.address === collateralToken.address && tokenOut.address === debtToken.address) {
         return {
           ...existingFillItem,
-          swapPrice_long: mulDiv(event.amountOut, collateralToken.unit, event.amountIn),
-          swapPrice_short: mulDiv(event.amountIn, debtToken.unit, event.amountOut),
+          referencePrice_long: mulDiv(event.amountOut, collateralToken.unit, event.amountIn),
+          referencePrice_short: mulDiv(event.amountIn, debtToken.unit, event.amountOut),
+          referencePriceSource: ReferencePriceSource.SwapPrice,
         }
       }
 
@@ -164,14 +166,14 @@ type GetMarkPriceParams = {
   collateralToken: Token
 }
 
-export type MarkPriceResult = {
+export type ReferencePriceResult = {
   price: bigint
-  source: PriceSource
+  source: ReferencePriceSource
 }
 
-export const markPriceWithFallback = async ({ lots, chainId, positionId, blockNumber, debtToken, collateralToken }: GetMarkPriceParams): Promise<MarkPriceResult> => {
+export const markPriceWithFallback = async ({ lots, chainId, positionId, blockNumber, debtToken, collateralToken }: GetMarkPriceParams): Promise<ReferencePriceResult> => {
   const markPrice = await getMarkPrice({ chainId, positionId, blockNumber, debtToken })
-  if (markPrice) return { price: markPrice, source: PriceSource.MarkPrice }
+  if (markPrice) return { price: markPrice, source: ReferencePriceSource.MarkPrice }
 
   const mostRecentLongLot = lots.filter(lot => lot.accountingType === AccountingType.Long).sort((a, b) => Number(b.createdAtBlock - a.createdAtBlock))[0]
   // if there are no long lots, we can't run the code below
@@ -179,22 +181,22 @@ export const markPriceWithFallback = async ({ lots, chainId, positionId, blockNu
 
   // if mark price is 0, we fall back to using the fill price of the most recent lot (the getMarkPrice function has a catch and returns 0n if it fails)
   console.log(`Unable to get mark price, using last lot price as fallback for ${positionId} on chain ${chainId}`)
-  return { price: calculateFillPrice({ fillCost: mostRecentLongLot.grossOpenCost, delta: mostRecentLongLot.grossSize, unit: collateralToken.unit }), source: PriceSource.LastLotPrice }
+  return { price: calculateFillPrice({ fillCost: mostRecentLongLot.grossOpenCost, delta: mostRecentLongLot.grossSize, unit: collateralToken.unit }), source: ReferencePriceSource.LastLotPrice }
 }
 
-export const withMarkPrice = async ({ position, partialFillItem, blockNumber, debtToken, collateralToken, lots }: { lots: Lot[]; position: Position; partialFillItem: PartialFillItem; blockNumber: number; debtToken: Token; collateralToken: Token; }) => {
+export const withFallbackReferencePrice = async ({ position, partialFillItem, blockNumber, debtToken, collateralToken, lots }: { lots: Lot[]; position: Position; partialFillItem: PartialFillItem; blockNumber: number; debtToken: Token; collateralToken: Token; }) => {
   // if the tradePrice is 0, we need to get the markPrice
-  if (partialFillItem.swapPrice_long === 0n || partialFillItem.swapPrice_short === 0n) {
+  if (partialFillItem.referencePrice_long === 0n || partialFillItem.referencePrice_short === 0n) {
     const { price, source } = await markPriceWithFallback({ lots, chainId: position.chainId, positionId: position.contangoPositionId, blockNumber, debtToken, collateralToken })
-    partialFillItem.swapPrice_long = price
-    partialFillItem.swapPrice_short = mulDiv(debtToken.unit, collateralToken.unit, price)
-    partialFillItem.priceSource = source
+    partialFillItem.referencePrice_long = price
+    partialFillItem.referencePrice_short = mulDiv(debtToken.unit, collateralToken.unit, price)
+    partialFillItem.referencePriceSource = source
 
     if (partialFillItem.fillItemType === FillItemType.Liquidated) {
       partialFillItem.liquidationPenalty = getLiquidationPenalty({ collateralToken, collateralDelta: partialFillItem.collateralDelta, debtDelta: partialFillItem.debtDelta, referencePrice: price })
     }
   }
-  return partialFillItem // the fill item will have the price source set to TradePrice by default, so we don't need to assign it here
+  return partialFillItem
 }
 
 export const calculateDust = (events: ContangoEvents[], partialFillItem: PartialFillItem) => {
@@ -219,10 +221,10 @@ export const calculateDust = (events: ContangoEvents[], partialFillItem: Partial
   return recordFromEntries(filtered)
 }
 
-const _baseToQuote = ({ partialFillItem, collateralToken }: { partialFillItem: PartialFillItem; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, partialFillItem.swapPrice_long, collateralToken.unit)
-const _quoteToBase = ({ partialFillItem, collateralToken }: { partialFillItem: PartialFillItem; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, collateralToken.unit, partialFillItem.swapPrice_long)
+const _baseToQuote = ({ partialFillItem, collateralToken }: { partialFillItem: PartialFillItem; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, partialFillItem.referencePrice_long, collateralToken.unit)
+const _quoteToBase = ({ partialFillItem, collateralToken }: { partialFillItem: PartialFillItem; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, collateralToken.unit, partialFillItem.referencePrice_long)
 
-export const calculateCashflowsAndFee = ({ partialFillItem, debtToken, collateralToken, dustRecord }: { dustRecord: ReturnType<typeof calculateDust>; partialFillItem: PartialFillItem; debtToken: Token; collateralToken: Token; }) => {
+export const calculateCashflowsAndFee = ({ partialFillItem, debtToken, collateralToken, dustRecord }: { dustRecord?: ReturnType<typeof calculateDust>; partialFillItem: PartialFillItem; debtToken: Token; collateralToken: Token; }) => {
   const { cashflow: _cashflow, cashflowToken_id, fee, feeToken_id } = partialFillItem
   const baseToQuote = _baseToQuote({ partialFillItem, collateralToken })
   const quoteToBase = _quoteToBase({ partialFillItem, collateralToken })
@@ -240,7 +242,9 @@ export const calculateCashflowsAndFee = ({ partialFillItem, debtToken, collatera
   let cashflowQuote = 0n
   let cashflowBase = 0n
 
-  Object.entries(dustRecord).forEach(([address, value]) => {
+  // account for any dust left in vault OR dust swept directly to the traders wallet
+  // this is important so that we can get accurate relative values for cashflowQuote and cashflowBase, which are used for all accounting calculations
+  Object.entries(dustRecord || {}).forEach(([address, value]) => {
     if (address === collateralToken.address) {
       cashflowBase -= value
       cashflowQuote -= baseToQuote(value)
@@ -252,7 +256,7 @@ export const calculateCashflowsAndFee = ({ partialFillItem, debtToken, collatera
 
   const { cashflowSwap } = partialFillItem
 
-  // if there's a cashflowSwap, we need to figure out which is the other token (either base or quote) and add/subtract the amount accordingly
+  // if there's a cashflowSwap, we need to figure out which is the other token. A cashflow swap will always have either base or quote as the other token
   if (cashflowSwap) {
     if (cashflowSwap.tokenOut_id === debtToken.id) {
       cashflowQuote += cashflowSwap.amountOut
@@ -268,6 +272,7 @@ export const calculateCashflowsAndFee = ({ partialFillItem, debtToken, collatera
       cashflowQuote -= baseToQuote(cashflowSwap.amountIn)
     }
   } else {
+    // if there's no cashflowSwap, it's a regular trade and we can just add/subtract the cashflow directly
     if (cashflowToken_id === debtToken.id) {
       cashflowQuote += cashflow
       cashflowBase += quoteToBase(cashflow)
@@ -275,13 +280,13 @@ export const calculateCashflowsAndFee = ({ partialFillItem, debtToken, collatera
       cashflowBase += cashflow
       cashflowQuote += baseToQuote(cashflow)
     } else {
-      console.log('cashflowToken_id', cashflowToken_id)
       // if we're in this block, something has gone wrong because the if statement above should have caught all the cases
       // if you see this error, the casfhlow swap is not being picked up and added to the fillItem before this function is called
       throw new Error('Invalid cashflow token id')
     }
   }
 
+  // because these two values are purely used for accounting, and we want to show realised pnl not accounting for our trading fees, we subtract the fees from the cashflows
   cashflowQuote -= fee_long
   cashflowBase -= fee_short
 

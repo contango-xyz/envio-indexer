@@ -8,9 +8,11 @@ import {
 import { Mutable } from "viem";
 import { eventStore, PositionSnapshot } from "../Store";
 import { createFillItemId, createIdForLot, createIdForPosition } from "../utils/ids";
-import { ContangoEvents, EventType, FillItemType, MigratedEvent } from "../utils/types";
-import { calculateCashflowsAndFee, calculateDust, calculateFillPrice, eventsToPartialFillItem, withMarkPrice } from "./helpers";
-import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCloseSize, initialiseLot, savePosition } from "./lotsAccounting";
+import { ContangoEvents, EventType, FillItemType, MigratedEvent, SwapEvent } from "../utils/types";
+import { calculateCashflowsAndFee, calculateDust, calculateFillPrice, eventsToPartialFillItem, ReferencePriceSource, withFallbackReferencePrice } from "./helpers";
+import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCloseSize, initialiseLot, saveLots, savePosition } from "./lotsAccounting";
+import { createInstrumentId } from "../utils/common";
+import { mulDiv } from "../utils/math-helpers";
 
 export const processEvents = async (
   {
@@ -32,7 +34,7 @@ export const processEvents = async (
   const { block: { number: blockNumber }, transaction: { hash: transactionHash } } = genericEvent
 
   // create the basic (partial) fillItem
-  const partialFillItem = await withMarkPrice({ lots: lotsSnapshot, position: positionSnapshot, partialFillItem: eventsToPartialFillItem(positionSnapshot, debtToken, collateralToken, events), blockNumber, debtToken, collateralToken })
+  const partialFillItem = await withFallbackReferencePrice({ lots: lotsSnapshot, position: positionSnapshot, partialFillItem: eventsToPartialFillItem(positionSnapshot, debtToken, collateralToken, events), blockNumber, debtToken, collateralToken })
 
   // dust left in the vault
   const dustRecord = calculateDust(events, partialFillItem)
@@ -71,9 +73,9 @@ export const processEvents = async (
     fillItemType: partialFillItem.fillItemType,
     lendingProfitToSettle: partialFillItem.lendingProfitToSettle,
     liquidationPenalty: partialFillItem.liquidationPenalty,
-    swapPrice_long: partialFillItem.swapPrice_long,
-    swapPrice_short: partialFillItem.swapPrice_short,
-    priceSource: partialFillItem.priceSource,
+    referencePrice_long: partialFillItem.referencePrice_long,
+    referencePrice_short: partialFillItem.referencePrice_short,
+    referencePriceSource: partialFillItem.referencePriceSource,
     fillCost_long,
     fillCost_short,
     fillPrice_long,
@@ -135,7 +137,7 @@ export const processEvents = async (
     collateral: positionSnapshot.collateral + fillItem.collateralDelta,
     debt: positionSnapshot.debt + fillItem.debtDelta,
     accruedLendingProfit: positionSnapshot.accruedLendingProfit + fillItem.lendingProfitToSettle,
-    accruedInterest: positionSnapshot.accruedInterest + fillItem.debtCostToSettle,
+    accruedDebtCost: positionSnapshot.accruedDebtCost + fillItem.debtCostToSettle,
     longCost: positionSnapshot.longCost + fillItem.fillCost_long,
     shortCost: positionSnapshot.shortCost + fillItem.fillCost_short,
   }
@@ -150,6 +152,13 @@ export const processEvents = async (
   return { position: newPosition, fillItem, lots: { longLots, shortLots } }
 }
 
+const saveFillItem = async (fillItem: FillItem, context: handlerContext) => {
+  if (fillItem.referencePriceSource === ReferencePriceSource.None) {
+    throw new Error('Fill item has no reference price source')
+  }
+  context.FillItem.set(fillItem)
+}
+
 export const eventsReducer = async ({ context, position, lots, collateralToken, debtToken, event }: PositionSnapshot & { context: handlerContext }) => {
   const { chainId, block: { timestamp, number: blockNumber }, transaction: { hash: transactionHash } } = event
 
@@ -159,13 +168,14 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
     if (migrationEvent) {
       const { newContangoPositionId, oldContangoPositionId } = migrationEvent as MigratedEvent
       const idOfNewPosition = createIdForPosition({ chainId, positionId: newContangoPositionId })
+      const swapEvent: SwapEvent | undefined = events.find(e => e.eventType === EventType.SWAP_EXECUTED) as SwapEvent | undefined
 
       context.Position.set({
         ...position,
         collateral: 0n,
         accruedLendingProfit: 0n,
         debt: 0n,
-        accruedInterest: 0n,
+        accruedDebtCost: 0n,
         fees_long: 0n,
         fees_short: 0n,
         cashflowBase: 0n,
@@ -191,23 +201,25 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
 
       const fillCost_long = position.longCost * -1n
       const fillCost_short = position.shortCost * -1n
+
+      const partialFillItemClose = await withFallbackReferencePrice({ lots, position, partialFillItem: eventsToPartialFillItem(position, debtToken, collateralToken, getEventsForPositionId(oldContangoPositionId)), blockNumber, debtToken, collateralToken })
+      const { cashflowQuote, cashflowBase, fee_long, fee_short } = calculateCashflowsAndFee({ partialFillItem: partialFillItemClose, debtToken, collateralToken })
       
-      const fillItem: Mutable<FillItem> = {
-        ...eventsToPartialFillItem(position, debtToken, collateralToken, getEventsForPositionId(oldContangoPositionId)),
+      const fillItemClose: Mutable<FillItem> = {
+        ...partialFillItemClose,
         id: createFillItemId({ ...event, positionId: oldContangoPositionId }),
         timestamp,
         chainId,
         blockNumber,
         transactionHash,
         contangoPositionId: oldContangoPositionId,
-        fee_long: 0n,
-        fee_short: 0n,
+        fee_long,
+        fee_short,
         realisedPnl_long: 0n,
         realisedPnl_short: 0n,
-        cashflowQuote: 0n,
-        cashflowBase: 0n,
+        cashflowQuote,
+        cashflowBase,
         cashflowSwap_id: undefined,
-        fee: 0n,
         feeToken_id: undefined,
         position_id: position.id,
         dust: 0n,
@@ -218,7 +230,7 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         fillPrice_short: calculateFillPrice({ fillCost: fillCost_short, unit: debtToken.unit, delta: position.debt }),
       } as const satisfies FillItem
 
-      context.FillItem.set(fillItem)
+      saveFillItem(fillItemClose, context)
 
       const openingFillItem: FillItem = {
         ...eventsToPartialFillItem(position, debtToken, collateralToken, getEventsForPositionId(newContangoPositionId)),
@@ -227,6 +239,9 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         chainId,
         blockNumber,
         transactionHash,
+        referencePrice_long: fillItemClose.referencePrice_long,
+        referencePrice_short: fillItemClose.referencePrice_short,
+        referencePriceSource: fillItemClose.referencePriceSource,
         contangoPositionId: newContangoPositionId,
         fee_long: 0n,
         fee_short: 0n,
@@ -246,32 +261,91 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         fillPrice_short: calculateFillPrice({ fillCost: position.shortCost, unit: debtToken.unit, delta: position.debt }),
       } as const satisfies FillItem
 
-      context.FillItem.set(openingFillItem)
-
-      const newPosition = {
-        ...position,
-        id: idOfNewPosition,
-        contangoPositionId: newContangoPositionId,
-      }
-
-      const newLots = lots.map((lot, index) => ({
-        ...lot,
-        id: createIdForLot({ chainId, positionId: newContangoPositionId, index }),
-        contangoPositionId: newContangoPositionId,
-      }))
+      saveFillItem(openingFillItem, context)
 
       for (const lot of lots) {
         context.Lot.deleteUnsafe(lot.id)
       }
 
-      await savePosition({ position: newPosition, lots: newLots, context })
+      if (swapEvent) {
+        const cashflowBase = mulDiv(position.cashflowBase + fillItemClose.cashflowBase, swapEvent.amountOut, swapEvent.amountIn)
+        const realisedPnl_short = mulDiv(position.realisedPnl_short, swapEvent.amountOut, swapEvent.amountIn)
+        const fees_short = mulDiv(position.fees_short, swapEvent.amountOut, swapEvent.amountIn)
+        const accruedLendingProfit = mulDiv(position.accruedLendingProfit + fillItemClose.lendingProfitToSettle, swapEvent.amountOut, swapEvent.amountIn)
+
+        const newPosition = {
+          ...position,
+          instrument_id: createInstrumentId({ chainId, instrumentId: newContangoPositionId }),
+          collateral: openingFillItem.collateralDelta,
+          debt: openingFillItem.debtDelta,
+          createdAtBlock: event.block.number,
+          createdAtTimestamp: event.block.timestamp,
+          createdAtTransactionHash: event.transaction.hash,
+          id: idOfNewPosition,
+          contangoPositionId: newContangoPositionId,
+          accruedLendingProfit,
+          accruedDebtCost: position.accruedDebtCost + fillItemClose.debtCostToSettle,
+          fees_long: position.fees_long + fee_long,
+          fees_short,
+          cashflowBase,
+          cashflowQuote: position.cashflowQuote + cashflowQuote,
+          realisedPnl_short,
+        }
+
+        const newLots = [
+          initialiseLot({
+            event,
+            position: newPosition,
+            accountingType: AccountingType.Long,
+            size: openingFillItem.collateralDelta,
+            cost: openingFillItem.fillCost_long,
+          }),
+          initialiseLot({
+            event,
+            position: newPosition,
+            accountingType: AccountingType.Short,
+            size: openingFillItem.debtDelta,
+            cost: openingFillItem.fillCost_short,
+          }),
+        ]
+
+        await savePosition({ position: newPosition, lots: newLots, context })
+      } else {
+        const newPosition = {
+          ...position,
+          createdAtBlock: event.block.number,
+          createdAtTimestamp: event.block.timestamp,
+          createdAtTransactionHash: event.transaction.hash,
+          id: idOfNewPosition,
+          contangoPositionId: newContangoPositionId,
+          collateral: position.collateral + fillItemClose.lendingProfitToSettle,
+          debt: position.debt + fillItemClose.debtCostToSettle,
+          accruedLendingProfit: position.accruedLendingProfit + fillItemClose.lendingProfitToSettle,
+          accruedDebtCost: position.accruedDebtCost + fillItemClose.debtCostToSettle,
+          fees_long: position.fees_long + fee_long,
+          fees_short: position.fees_short + fee_short,
+          cashflowBase: position.cashflowBase + cashflowBase,
+          cashflowQuote: position.cashflowQuote + cashflowQuote,    
+        }
+
+        const newLots = lots.map((lot, index) => ({
+          ...lot,
+          id: createIdForLot({ chainId, positionId: newContangoPositionId, index }),
+          contangoPositionId: newContangoPositionId,
+          createdAtBlock: event.block.number,
+          createdAtTimestamp: event.block.timestamp,
+          createdAtTransactionHash: event.transaction.hash,
+        }))
+  
+        await savePosition({ position: newPosition, lots: newLots, context })
+      }
 
       return
     }
 
     const result = await processEvents({ genericEvent: event, events, position, lots, debtToken, collateralToken })
 
-    context.FillItem.set(result.fillItem)
+    await saveFillItem(result.fillItem, context)
     await savePosition({ position: result.position, lots: [...result.lots.longLots, ...result.lots.shortLots], context })
   } catch (e) {
     console.error('error processing events', e)

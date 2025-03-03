@@ -48,13 +48,15 @@ type FillItem {
 
   position: Position! @index
 
-  swapPrice_long: BigInt! # swap price in debt ccy terms
-  swapPrice_short: BigInt! # swap price in collateral ccy terms
-  priceSource: String! # PriceSource
-
   fillCost_long: BigInt! # actual cost paid. dividing this by collateral delta will give the true fill price (including any flashloan fees etc)
   fillCost_short: BigInt! # actual cost paid. dividing this by debt delta will give the true fill price (including any flashloan fees etc)
 
+  # these prices are either: the swap price, the mark price, or a fallback price (fill price of most recently created lot)
+  referencePrice_long: BigInt! # in debt ccy terms
+  referencePrice_short: BigInt! # in collateral ccy terms
+  referencePriceSource: String! # ReferencePriceSource
+
+  # these prices are the fill cost divided by the size delta -- we should always use these values when displaying fill prices in the UI
   fillPrice_long: BigInt! # fillCostLong divided by collateralDelta
   fillPrice_short: BigInt! # fillCostShort divided by debtDelta
 
@@ -90,7 +92,7 @@ type Position {
   accruedLendingProfit: BigInt! # this is the collateral balance with lending profit included
 
   debt: BigInt! # this is the sum of the debt deltas of all fills
-  accruedInterest: BigInt! # this is the debt balance with interest accrued included
+  accruedDebtCost: BigInt! # this is the debt balance with interest accrued included
 
   cashflowBase: BigInt! # sum of all cashflows in base ccy (absolute value, not "relative")
   cashflowQuote: BigInt! # sum of all cashflows in quote ccy (absolute value, not "relative")
