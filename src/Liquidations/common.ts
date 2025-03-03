@@ -1,7 +1,7 @@
 import { handlerContext, Token } from "generated/src/Types.gen";
 import { Hex } from "viem";
 import { createUnderlyingPositionId } from "../ContangoProxy";
-import { max, mulDiv } from "../utils/math-helpers";
+import { mulDiv } from "../utils/math-helpers";
 
 export const getPositionIdForProxyAddress = async ({ chainId, user, context }: { chainId: number; user: string; context: handlerContext; }) => {
   const underlyingPosition = await context.UnderlyingPositionFactory_UnderlyingPositionCreated.get(createUnderlyingPositionId({ chainId, proxyAddress: user }))

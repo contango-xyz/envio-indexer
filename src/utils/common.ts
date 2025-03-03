@@ -1,4 +1,4 @@
-import { Instrument, Token, handlerContext } from "generated";
+import { Instrument, Position, Token, handlerContext } from "generated";
 import { Hex, getContract, parseAbi } from "viem";
 import { contangoAbi, iAaveOracleAbi, iContangoLensAbi, iPoolAddressesProviderAbi } from "../abis";
 import { clients } from "../clients";
@@ -47,6 +47,19 @@ export const getBalancesAtBlock = async (chainId: number, positionId: string, bl
   const balancesFromChain = await _getBalancesAtBlock(chainId, positionId as Hex, blockNumber)
   cached.add({ [`${positionId}-${blockNumber}`]: balancesFromChain })
   return balancesFromChain
+}
+
+export const getInterestToSettleOnLiquidation = async ({ chainId, blockNumber, position }: { position: Position; chainId: number; blockNumber: number }) => {
+  const { collateral: collateralBefore, debt: debtBefore } = await getBalancesAtBlock(chainId, position.contangoPositionId, blockNumber - 1)
+
+  const lendingProfitToSettle = collateralBefore > 0n ? collateralBefore - position.collateral : 0n
+  const debtCostToSettle = debtBefore > 0n ? debtBefore - position.debt : 0n
+
+  if (lendingProfitToSettle < 0n || debtCostToSettle < 0n) {
+    throw new Error('Interest to settle cannot be negative')
+  }
+
+  return { lendingProfitToSettle, debtCostToSettle }
 }
 
 export const createInstrumentId = ({ chainId, instrumentId }: { chainId: number; instrumentId: string; }) => `${chainId}_${instrumentId.slice(0, 34)}`

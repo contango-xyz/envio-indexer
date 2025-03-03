@@ -11,10 +11,10 @@ import { GenericEvent } from "../accounting/lotsAccounting";
 import { eventsReducer } from "../accounting/processEvents";
 import { clients } from "../clients";
 import { eventStore } from "../Store";
-import { getBalancesAtBlock } from "../utils/common";
+import { getInterestToSettleOnLiquidation } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { positionIdMapper } from "../utils/mappers";
-import { max, mulDiv } from "../utils/math-helpers";
+import { mulDiv } from "../utils/math-helpers";
 import { EventType } from "../utils/types";
 import { getPositionIdForProxyAddress } from "./common";
 
@@ -92,7 +92,7 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
       return
     }
     const { position } = snapshot
-    const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
+    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number - 1, position })
 
     const aaveLiquidationEvent = await processAaveLiquidationEvents({
       chainId: event.chainId,
@@ -107,8 +107,6 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
     })
 
     try {
-      const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
-      const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
   
       const liquidationEvent: ContangoLiquidationEvent = {
         ...aaveLiquidationEvent,
@@ -123,7 +121,7 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
       await eventsReducer({ ...snapshot, context })
     } catch (e) {
       console.error(e)
-      context.log.debug(`Error processing liquidation for positionId: ${positionId} balancesBefore: ${balancesBefore.collateral} ${balancesBefore.debt} position: ${position.collateral} ${position.debt}`)
+      context.log.debug(`Error processing liquidation for positionId: ${positionId} lendingProfitToSettle: ${lendingProfitToSettle} debtCostToSettle: ${debtCostToSettle}`)
     }
 
   }

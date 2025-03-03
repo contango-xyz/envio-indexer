@@ -1,9 +1,8 @@
 import { ContangoLiquidationEvent, MorphoLiquidations } from "generated";
 import { eventsReducer } from "../accounting/processEvents";
 import { eventStore } from "../Store";
-import { getBalancesAtBlock } from "../utils/common";
+import { getInterestToSettleOnLiquidation } from "../utils/common";
 import { createEventId } from "../utils/ids";
-import { max } from "../utils/math-helpers";
 import { EventType } from "../utils/types";
 import { getPositionIdForProxyAddress } from "./common";
 
@@ -18,10 +17,7 @@ MorphoLiquidations.LiquidateMorpho.handler(async ({ event, context }) => {
     }
 
     const { position } = snapshot
-    const balancesBefore = await getBalancesAtBlock(event.chainId, positionId, event.block.number - 1)
-
-    const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
-    const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
+    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number - 1, position })
 
     const liquidationEvent: ContangoLiquidationEvent = {
       id: createEventId({ ...event, eventType: EventType.LIQUIDATION }),
