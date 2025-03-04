@@ -46,7 +46,6 @@ IMoneyMarket.Repaid.handler(async ({ event, context }) => {
 }, { wildcard: true })
 
 // Collateral events
-
 IMoneyMarket.Lent.handler(async ({ event, context }) => {
   const asset = await getOrCreateToken({ address: event.params.asset, chainId: event.chainId, context })
   const eventId = createEventId({ ...event, eventType: EventType.COLLATERAL })

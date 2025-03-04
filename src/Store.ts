@@ -85,6 +85,10 @@ class EventStore {
     return events
   }
 
+  getEventsForKey(key: StoreKey) {
+    return this.store[key] || []
+  }
+
   async cleanup(cleanupChainId: number, currentBlock: number, context: handlerContext) {
     const keysToDelete: StoreKey[] = []
     for (const key of recordKeys(this.store)) {

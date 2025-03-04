@@ -3,6 +3,7 @@ import { Token, handlerContext } from "generated";
 import * as path from "path";
 import { ReturnPromiseType } from "./types";
 import { Balances } from "./common";
+import * as lockfile from 'proper-lockfile';
 
 export const CacheCategory = {
   Token: "token",
@@ -28,17 +29,63 @@ type ShapeBalances = Record<string, Balances>;
 type Shape = ShapeToken | ShapeInstrument | ShapeTokenPair | ShapeBalances | ShapeMarkPrice;
 
 export class Cache {
-  static init<C extends CacheCategory>(
-{ category, chainId }: { category: C; chainId: number | string | bigint; }  ) {
+  // Store instances by key (category-chainId)
+  private static instances: Map<string, Entry<any>> = new Map();
+
+  static async init<C extends CacheCategory>({
+    category,
+    chainId,
+  }: {
+    category: C;
+    chainId: number | string | bigint;
+  }) {
     if (!Object.values(CacheCategory).find((c) => c === category)) {
       throw new Error("Unsupported cache category");
     }
 
-    type S = C extends "token" ? ShapeToken : C extends "instrument" ? ShapeInstrument : C extends "token-pair" ? ShapeTokenPair : C extends "balances" ? ShapeBalances : C extends "mark-price" ? ShapeMarkPrice : never
-    const entry = new Entry<S>(`${category}-${chainId.toString()}`);
+    // Create a unique key for the cache instance
+    const key = `${category}-${chainId.toString()}`;
+
+    // Return the existing instance if available
+    if (Cache.instances.has(key)) {
+      return Cache.instances.get(key) as Entry<
+        C extends "token"
+          ? ShapeToken
+          : C extends "instrument"
+          ? ShapeInstrument
+          : C extends "token-pair"
+          ? ShapeTokenPair
+          : C extends "balances"
+          ? ShapeBalances
+          : C extends "mark-price"
+          ? ShapeMarkPrice
+          : never
+      >;
+    }
+
+    // Otherwise, create a new instance
+    type S = C extends "token"
+      ? ShapeToken
+      : C extends "instrument"
+      ? ShapeInstrument
+      : C extends "token-pair"
+      ? ShapeTokenPair
+      : C extends "balances"
+      ? ShapeBalances
+      : C extends "mark-price"
+      ? ShapeMarkPrice
+      : never;
+      
+    const entry = new Entry<S>(key);
+    await entry.load();
+
+    // Cache the new instance
+    Cache.instances.set(key, entry);
+
     return entry;
   }
 }
+
 
 const replacer = (_key: string, value: any) => {
   if (typeof value === 'bigint') {
@@ -56,6 +103,7 @@ const reviver = (_key: string, value: any) => {
 
 export class Entry<T extends Shape> {
   private memory: T = {} as T;
+  private lockRelease: (() => Promise<void>) | null = null;
 
   static encoding = "utf8" as const;
   static folder = "./.cache" as const;
@@ -66,9 +114,36 @@ export class Entry<T extends Shape> {
   constructor(key: string) {
     this.key = key;
     this.file = Entry.resolve(key);
+  }
 
-    this.preflight();
-    this.load();
+  private async acquireLock(): Promise<void> {
+    try {
+      this.lockRelease = await lockfile.lock(this.file, { retries: 10 })
+    } catch (error) {
+      console.error('Failed to acquire lock:', error);
+      throw error;
+    }
+  }
+
+  private async releaseLock(): Promise<void> {
+    if (this.lockRelease) {
+      await this.lockRelease();
+      this.lockRelease = null;
+    }
+  }
+
+  public async load() {
+    try {
+      this.preflight()
+      await this.acquireLock();
+      const data = fs.readFileSync(this.file, Entry.encoding);
+      this.memory = JSON.parse(data, reviver) as T;
+    } catch (error) {
+      console.error(error);
+      this.memory = {} as T;
+    } finally {
+      await this.releaseLock();
+    }
   }
 
   public read<K extends keyof T>(key: K): T[K] {
@@ -76,27 +151,28 @@ export class Entry<T extends Shape> {
     return memory[key] as T[K];
   }
 
-  public load() {
+  public async add<N extends T>(fields: N) {
     try {
+      await this.acquireLock();
+      
+      // Reload the latest state before making changes
       const data = fs.readFileSync(this.file, Entry.encoding);
       this.memory = JSON.parse(data, reviver) as T;
-    } catch (error) {
-      console.error(error);
-      this.memory = {} as T;
-    }
-  }
 
-  public add<N extends T>(fields: N) {
-    if (!this.memory || Object.values(this.memory).length === 0) {
-      this.memory = fields;
-    } else {
-      Object.entries(fields).forEach(([key, value]) => {
-        if (!this.memory[key]) {
-          this.memory[key] = value;
-        }
-      });
+      if (!this.memory || Object.values(this.memory).length === 0) {
+        this.memory = fields;
+      } else {
+        Object.entries(fields).forEach(([key, value]) => {
+          if (!this.memory[key]) {
+            this.memory[key] = value;
+          }
+        });
+      }
+      
+      await this.publish();
+    } finally {
+      await this.releaseLock();
     }
-    this.publish();
   }
 
   private preflight() {
@@ -109,12 +185,13 @@ export class Entry<T extends Shape> {
     }
   }
 
-  private publish() {
+  private async publish() {
     const prepared = JSON.stringify(this.memory, replacer);
     try {
       fs.writeFileSync(this.file, prepared);
     } catch (error) {
       console.error(error);
+      throw error;
     }
   }
 
@@ -122,3 +199,4 @@ export class Entry<T extends Shape> {
     return path.join(Entry.folder, key.toLowerCase().concat(".json"));
   }
 }
+

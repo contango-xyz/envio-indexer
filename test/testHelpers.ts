@@ -2,8 +2,10 @@ import fs from 'fs/promises'
 import { Lot, TestHelpers } from 'generated'
 import path from 'path'
 import { decodeEventLog, erc20Abi, getAbiItem, Hex, Log, parseAbi, toEventSelector } from 'viem'
-import { contangoAbi, iMoneyMarketAbi, maestroAbi, positionNftAbi, simpleSpotExecutorAbi, spotExecutorAbi, strategyBuilderAbi, underlyingPositionFactoryAbi } from '../src/abis'
+import { contangoAbi, iMoneyMarketAbi, liquidationsAbi, maestroAbi, positionNftAbi, simpleSpotExecutorAbi, spotExecutorAbi, strategyBuilderAbi, underlyingPositionFactoryAbi } from '../src/abis'
 import { clients } from '../src/clients'
+import { createIdForPosition, decodeIdForPosition, IdForPosition } from '../src/utils/ids'
+import { positionIdMapper } from '../src/utils/mappers'
 
 const {
   ContangoProxy,
@@ -16,6 +18,14 @@ const {
   WrappedNative,
   StrategyProxy,
   Maestro,
+  CometLiquidations,
+  AaveLiquidations,
+  EulerLiquidations,
+  SiloLiquidations,
+  MorphoLiquidations,
+  CompoundLiquidations,
+  ExactlyLiquidations,
+  DolomiteLiquidations
 } = TestHelpers
 
 const wethAbi = parseAbi([
@@ -57,6 +67,17 @@ const abiItems = {
   },
   'Maestro': {
     'FeeCollected': getAbiItem({ abi: maestroAbi, name: "FeeCollected" }),
+  },
+  'Liquidations': {
+    'AbsorbCollateral': getAbiItem({ abi: liquidationsAbi, name: "AbsorbCollateral" }),
+    'LiquidateDolomite': getAbiItem({ abi: liquidationsAbi, name: "LogLiquidate" }),
+    'LiquidateEuler': getAbiItem({ abi: liquidationsAbi, name: "Liquidate" }),
+    'LiquidateMorpho': getAbiItem({ abi: liquidationsAbi, name: "Liquidate" }),
+    'LiquidateSilo': getAbiItem({ abi: liquidationsAbi, name: "Liquidate" }),
+    'LiquidateAave': getAbiItem({ abi: liquidationsAbi, name: "LiquidationCall" }),
+    'LiquidateAgave': getAbiItem({ abi: liquidationsAbi, name: "LiquidationCall" }),
+    'LiquidateRadiant': getAbiItem({ abi: liquidationsAbi, name: "LiquidationCall" }),
+    'LiquidateCompound': getAbiItem({ abi: liquidationsAbi, name: "LiquidateBorrow" }),
   }
 }
 
@@ -90,6 +111,8 @@ const logToEvent = ({ log, from, to, chainId }: { log: Log; from: Hex; to: Hex; 
           if (getEventSelectors('UnderlyingPositionFactory').includes(topics[0])) return underlyingPositionFactoryAbi
 
           if (getEventSelectors('Maestro').includes(topics[0])) return maestroAbi
+
+          if (getEventSelectors('Liquidations').includes(topics[0])) return liquidationsAbi
 
           return null
         })()
@@ -162,10 +185,9 @@ const getTransactionLogs = async (chainId: number, transactionHash: string): Pro
   }
 }
 
-const runProcessing = async ({ mockDb, positionId, chainId, transactionHash, blockNumber, from, to, owner }: { owner: string; from: string; to: string; mockDb: ReturnType<typeof MockDb.createMockDb>; positionId: Hex; chainId: number; transactionHash: string; blockNumber: number }) => {
+const runProcessing = async ({ mockDb, positionId, chainId, transactionHash, blockNumber, from, to }: { from: string; to: string; mockDb: ReturnType<typeof MockDb.createMockDb>; positionId: Hex; chainId: number; transactionHash: string; blockNumber: number }) => {
   const mockEvent = StrategyProxy.EndStrategy.createMockEvent({
     positionId,
-    owner,
     mockEventData: {
       srcAddress: '0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd',
       chainId,
@@ -181,22 +203,21 @@ const runProcessing = async ({ mockDb, positionId, chainId, transactionHash, blo
     },
   })
 
-  try {
-    return await StrategyProxy.EndStrategy.processEvent({
-      event: mockEvent,
-      mockDb,
-    })
-  } catch (e) {
-    console.error('here fucked', e)
-    return mockDb
-  }
+  return await StrategyProxy.EndStrategy.processEvent({
+    event: mockEvent,
+    mockDb,
+  })
 }
 
-export const processTransaction = async (chainId: number, transactionHash: string, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
-  const { logs, from, to } = await getTransactionLogs(chainId, transactionHash)
+export const getTransactionEvents = async (id: IdForPosition, transactionHash: string) => {
+  const { chainId } = decodeIdForPosition(id)
+  const transactionLogs = await getTransactionLogs(chainId, transactionHash)
+  return transactionLogs.logs.map(log => logToEvent({ log, from: transactionLogs.from, to: transactionLogs.to, chainId }))
+}
 
-  let positionId: Hex | undefined
-  let owner: Hex | undefined
+export const processTransaction = async (id: IdForPosition, transactionHash: string, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
+  const { chainId, positionId } = decodeIdForPosition(id)
+  const { logs, from, to } = await getTransactionLogs(chainId, transactionHash)
 
   for (const log of logs) {
     const event = logToEvent({ log, from, to, chainId })
@@ -232,8 +253,6 @@ export const processTransaction = async (chainId: number, transactionHash: strin
         break
       }
       case 'PositionUpserted': {
-        positionId = event.args.positionId
-        owner = event.args.owner
         mockDb = await ContangoProxy.PositionUpserted.processEvent({
           event: {
             ...event,
@@ -325,14 +344,92 @@ export const processTransaction = async (chainId: number, transactionHash: strin
         })
         break
       }
+      case 'AbsorbCollateral': {
+        mockDb = await CometLiquidations.AbsorbCollateral.processEvent({
+          event: { ...event, params: event.args },
+          mockDb
+        })
+        break
+      }
+      case 'LogLiquidate': {
+        mockDb = await DolomiteLiquidations.LiquidateDolomite.processEvent({
+          event: {
+            ...event,
+            params: {
+              ...event.args,
+              solidHeldUpdateSign: event.args.solidHeldUpdate.deltaWei.sign,
+              solidHeldUpdateValue: event.args.solidHeldUpdate.deltaWei.value,
+              solidOwedUpdateSign: event.args.solidOwedUpdate.deltaWei.sign,
+              solidOwedUpdateValue: event.args.solidOwedUpdate.deltaWei.value,
+              liquidHeldUpdateSign: event.args.liquidHeldUpdate.deltaWei.sign,
+              liquidHeldUpdateValue: event.args.liquidHeldUpdate.deltaWei.value,
+              liquidOwedUpdateSign: event.args.liquidOwedUpdate.deltaWei.sign,
+              liquidOwedUpdateValue: event.args.liquidOwedUpdate.deltaWei.value,
+            }
+          },
+          mockDb
+        })
+        break
+      }
+      case 'Liquidate': {
+        // exactly - morpho - euler - silo
+        if ('lendersAssets' in event.args) {
+          mockDb = await ExactlyLiquidations.LiquidateExactly.processEvent({
+            event: { ...event, params: event.args },
+            mockDb
+          })
+        } else if ('badDebtAssets' in event.args) {
+          mockDb = await MorphoLiquidations.LiquidateMorpho.processEvent({
+            event: { ...event, params: event.args },
+            mockDb
+          })
+        } else if ('yieldBalance' in event.args) {
+          mockDb = await EulerLiquidations.LiquidateEuler.processEvent({
+            event: { ...event, params: event.args },
+            mockDb
+          })
+        } else if ('seizedCollateral' in event.args) {
+          mockDb = await SiloLiquidations.LiquidateSilo.processEvent({
+            event: { ...event, params: event.args },
+            mockDb
+          })
+        }
+        break
+      }
+      case 'LiquidateBorrow': {
+        mockDb = await CompoundLiquidations.LiquidateCompound.processEvent({
+          event: { ...event, params: event.args },
+          mockDb
+        })
+        break
+      }
+      case 'LiquidationCall': {
+        if ('useAToken' in event.args) {
+          mockDb = await AaveLiquidations.LiquidateAgave.processEvent({
+            event: { ...event, params: event.args },
+            mockDb
+          })
+        } else if ('liquidationFeeTo' in event.args) {
+          mockDb = await AaveLiquidations.LiquidateRadiant.processEvent({
+            event: { ...event, params: event.args },
+            mockDb
+          })
+        } else {
+          mockDb = await AaveLiquidations.LiquidateAave.processEvent({
+            event: { ...event, params: event.args },
+            mockDb
+          })
+        }
+        break
+      }
       default:
         break
     }
   }
 
   const { blockNumber } = logs[0]
-  if (positionId && blockNumber !== null && owner) {
-    mockDb = await runProcessing({ mockDb, positionId, chainId, transactionHash, blockNumber: Number(blockNumber), from, to, owner })
+  if (positionId && blockNumber !== null) {
+    mockDb = await runProcessing({ mockDb, positionId, chainId, transactionHash, blockNumber: Number(blockNumber), from, to })
   } else {
     throw new Error('Position ID not found')
   }
@@ -340,13 +437,15 @@ export const processTransaction = async (chainId: number, transactionHash: strin
   return mockDb
 }
 
-const getTransactionHashesCacheKey = (chainId: number, positionId: Hex) => {
-  return path.join(getCacheDir(), `${chainId}_${positionId}_txs.json`)
+const getTransactionHashesCacheKey = (id: IdForPosition) => {
+  return path.join(getCacheDir(), `${id}_txs.json`)
 }
 
-export const getTransactionHashes = async (chainId: number, positionId: Hex) => {
-  const cacheKey = getTransactionHashesCacheKey(chainId, positionId)
-  
+
+export const getTransactionHashes = async (id: IdForPosition) => {
+  const cacheKey = getTransactionHashesCacheKey(id)
+  const { chainId, positionId } = decodeIdForPosition(id)
+
   try {
     const cached = await fs.readFile(cacheKey, 'utf-8')
     return JSON.parse(cached, reviver) as Hex[]
@@ -372,17 +471,13 @@ export const getTransactionHashes = async (chainId: number, positionId: Hex) => 
   }
 }
 
-export const processTransactions = async (chainId: number, positionId: Hex, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
-  const transactionHashes = await getTransactionHashes(chainId, positionId)
-
-  console.log('transactionHashes', transactionHashes)
+export const processTransactions = async (id: IdForPosition, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
+  const transactionHashes = await getTransactionHashes(id)
 
   for (let i = 0; i < transactionHashes.length; i++) {
-    mockDb = await processTransaction(chainId, transactionHashes[i], mockDb)
+    mockDb = await processTransaction(id, transactionHashes[i], mockDb)
     const fillItem = mockDb.entities.FillItem.getAll()[i]
     const position = mockDb.entities.Position.get(fillItem.position_id)
-    console.log('fillItem', fillItem)
-    console.log('position', position)
   }
 
   return mockDb

@@ -1,14 +1,10 @@
-import {
-  ContangoLiquidationEvent,
-  ExactlyLiquidations
-} from "generated";
+import { ContangoLiquidationEvent, ExactlyLiquidations } from "generated";
 import { eventsReducer } from "../accounting/processEvents";
 import { eventStore } from "../Store";
-import { getBalancesAtBlock, getMarkPrice } from "../utils/common";
+import { getInterestToSettleOnLiquidation } from "../utils/common";
 import { createEventId } from "../utils/ids";
-import { max } from "../utils/math-helpers";
 import { EventType } from "../utils/types";
-import { getLiquidationPenalty, getPositionIdForProxyAddress } from "./common";
+import { getPositionIdForProxyAddress } from "./common";
 
 ExactlyLiquidations.LiquidateExactly.handler(async ({ event, context }) => {
   const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.borrower, context })
@@ -20,14 +16,8 @@ ExactlyLiquidations.LiquidateExactly.handler(async ({ event, context }) => {
       return
     }
 
-    const { position, collateralToken, debtToken } = snapshot
-    const [balancesBefore, markPrice] = await Promise.all([
-      getBalancesAtBlock(event.chainId, positionId, event.block.number - 1),
-      getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
-    ])
-
-    const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
-    const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
+    const { position } = snapshot
+    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number - 1, position })
 
     const liquidationEvent: ContangoLiquidationEvent = {
       id: createEventId({ ...event, eventType: EventType.LIQUIDATION }),
@@ -40,8 +30,6 @@ ExactlyLiquidations.LiquidateExactly.handler(async ({ event, context }) => {
       transactionHash: event.transaction.hash,
       lendingProfitToSettle,
       debtCostToSettle,
-      liquidationPenalty: getLiquidationPenalty({ collateralToken, collateralDelta: event.params.seizedAssets, debtDelta: event.params.assets, markPrice }),
-      markPrice,
     }
     context.ContangoLiquidationEvent.set(liquidationEvent)
     eventStore.addLog({ event: { ...event, params: { positionId } }, contangoEvent: { ...liquidationEvent, eventType: EventType.LIQUIDATION } })

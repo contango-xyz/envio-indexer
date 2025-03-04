@@ -1,17 +1,15 @@
 import { ERC20, ERC20_Transfer_event, WrappedNative } from "generated";
 import { zeroAddress } from "viem";
 import { eventStore } from "./Store";
-import { wrappedNativeMap } from "./utils/constants";
+import { wrappedNativeMap, ADDRESSES } from "./utils/constants";
 import { createEventId } from "./utils/ids";
 import { EventType, TransferEvent } from "./utils/types";
 
-export const vaultProxy = "0x3f37c7d8e61c000085aac0515775b06a3412f36b"
-export const maestroProxy = "0xa6a147946facac9e0b99824870b36088764f969f"
 export const TRADER_CONSTANT = "0x0000000000000000000000000000000000000001"
 
-const depositWithdrawalAddresses = [
-  vaultProxy,
-  maestroProxy, // cashflow in alternative ccy goes to the maestro proxy (or at least did in the past)
+const depositWithdrawalAddresses: string[] = [
+  ADDRESSES.vaultProxy,
+  ADDRESSES.maestroProxy, // cashflow in alternative ccy goes to the maestro proxy (or at least did in the past)
 ]
 
 const depositWithdrawalFilters = depositWithdrawalAddresses.map(address => ([{ from: address }, { to: address }])).flat()
@@ -41,13 +39,15 @@ ERC20.Transfer.handler(async ({ event }) => {
     const erc20Event: ERC20_Transfer_event = {
       ...event,
       params: {
-        from: isMint ? TRADER_CONSTANT : vaultProxy, // hardcode to vaultProxy to handle legacy implmentations where the flows went directly to/from the maestro proxy
-        to: isMint ? vaultProxy : TRADER_CONSTANT, // hardcode to vaultProxy to handle legacy implmentations where the flows went directly to/from the maestro proxy
+        from: isMint ? TRADER_CONSTANT : ADDRESSES.vaultProxy, // hardcode to vaultProxy to handle legacy implmentations where the flows went directly to/from the maestro proxy
+        to: isMint ? ADDRESSES.vaultProxy : TRADER_CONSTANT, // hardcode to vaultProxy to handle legacy implmentations where the flows went directly to/from the maestro proxy
         value: event.params.value
       }
     }
     const isWrappedNative = event.srcAddress.toLowerCase() === wrappedNativeMap[event.chainId]
-    if (isWrappedNative && (isMint || isBurn) && depositWithdrawalAddresses.includes(from) || depositWithdrawalAddresses.includes(to)) {
+    const isMintToVaultOrContango = isMint && (to === ADDRESSES.vaultProxy || to === ADDRESSES.maestroProxy || to === ADDRESSES.contangoProxy)
+    const isBurnFromVaultOrContango = isBurn && (from === ADDRESSES.vaultProxy || from === ADDRESSES.maestroProxy || from === ADDRESSES.contangoProxy)
+    if (isWrappedNative && (isMintToVaultOrContango || isBurnFromVaultOrContango)) {
       eventStore.addLog({ event, contangoEvent: createContangoEvent(erc20Event) })
     }  
   }

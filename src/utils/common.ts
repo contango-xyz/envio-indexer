@@ -1,15 +1,15 @@
-import { Instrument, Token, handlerContext } from "generated";
+import { Instrument, Position, Token, handlerContext } from "generated";
 import { Hex, getContract, parseAbi } from "viem";
 import { contangoAbi, iAaveOracleAbi, iContangoLensAbi, iPoolAddressesProviderAbi } from "../abis";
 import { clients } from "../clients";
 import { Cache, CacheCategory } from "./cache";
 import { decodeTokenId, getOrCreateToken } from "./getTokenDetails";
 import { createIdForPosition } from "./ids";
-import { mulDiv } from "./math-helpers";
+import { max, mulDiv } from "./math-helpers";
 import { ReturnPromiseType } from "./types";
 import { positionIdMapper } from "./mappers";
-import { maestroProxy } from "../ERC20";
 import { arbitrum, avalanche, base, bsc, gnosis, mainnet, optimism, polygon, scroll } from "viem/chains";
+import { ADDRESSES } from "./constants";
 
 export const lensAbi = parseAbi([
   "struct Balances { uint256 collateral; uint256 debt; }",
@@ -18,14 +18,12 @@ export const lensAbi = parseAbi([
   "function prices(bytes32 positionId) external view returns (Prices memory prices_)",
 ])
 
-export const lensAddress = '0xe03835Dfae2644F37049c1feF13E8ceD6b1Bb72a'
-
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export const _getBalancesAtBlock = async (chainId: number, positionId: Hex, blockNumber: number) => {
   const lensContract = getContract({
     abi: lensAbi,
-    address: lensAddress,
+    address: ADDRESSES.lens,
     client: clients[chainId]
   })
 
@@ -40,7 +38,7 @@ export const _getBalancesAtBlock = async (chainId: number, positionId: Hex, bloc
 export type Balances = ReturnPromiseType<typeof _getBalancesAtBlock>
 
 export const getBalancesAtBlock = async (chainId: number, positionId: string, blockNumber: number) => {
-  const cached = Cache.init({ category: CacheCategory.Balances, chainId })
+  const cached = await Cache.init({ category: CacheCategory.Balances, chainId })
   const balances = cached.read(`${positionId}-${blockNumber}`)
   if (balances) return balances
 
@@ -49,13 +47,22 @@ export const getBalancesAtBlock = async (chainId: number, positionId: string, bl
   return balancesFromChain
 }
 
+export const getInterestToSettleOnLiquidation = async ({ chainId, blockNumber, position }: { position: Position; chainId: number; blockNumber: number }) => {
+  const { collateral: collateralBefore, debt: debtBefore } = await getBalancesAtBlock(chainId, position.contangoPositionId, blockNumber - 1)
+
+  const lendingProfitToSettle = max(collateralBefore - position.collateral, 0n)
+  const debtCostToSettle = max(debtBefore - position.debt, 0n)
+
+  return { lendingProfitToSettle, debtCostToSettle }
+}
+
 export const createInstrumentId = ({ chainId, instrumentId }: { chainId: number; instrumentId: string; }) => `${chainId}_${instrumentId.slice(0, 34)}`
 
 const getPrices = async ({ chainId, positionId, blockNumber }: { chainId: number; positionId: string; blockNumber: bigint }) => {
   const { symbolHex } = positionIdMapper(positionId)
   const client = clients[chainId]
-  const lens = getContract({ abi: iContangoLensAbi, address: lensAddress, client })
-  const contango = getContract({ abi: contangoAbi, address: maestroProxy, client })
+  const lens = getContract({ abi: iContangoLensAbi, address: ADDRESSES.lens, client })
+  const contango = getContract({ abi: contangoAbi, address: ADDRESSES.contangoProxy, client })
 
   try {
     return await lens.read.prices([positionId as Hex], { blockNumber })
@@ -92,7 +99,7 @@ const getPrices = async ({ chainId, positionId, blockNumber }: { chainId: number
       client,
     })
     const [instrument, aaveOracleAddress] = await Promise.all([
-      contango.read.instrument([symbolHex], { blockNumber }),
+      contango.read.instrument([symbolHex]),
       poolAddressesProvider.read.getPriceOracle({ blockNumber }),
     ])
 
@@ -118,7 +125,7 @@ const getPrices = async ({ chainId, positionId, blockNumber }: { chainId: number
 }
 
 export const getMarkPrice = async ({ chainId, positionId, blockNumber, debtToken }: { debtToken: Token; chainId: number; positionId: string; blockNumber: number }): Promise<bigint> => {
-  const cached = Cache.init({ category: CacheCategory.MarkPrice, chainId })
+  const cached = await Cache.init({ category: CacheCategory.MarkPrice, chainId })
   const id = `${createInstrumentId({ chainId, instrumentId: positionId })}-${blockNumber}`
   const markPrice = cached.read(id)
   if (markPrice) return markPrice
@@ -128,8 +135,8 @@ export const getMarkPrice = async ({ chainId, positionId, blockNumber, debtToken
     const price = mulDiv(prices.collateral, debtToken.unit, prices.debt)
     cached.add({ [id]: price })
     return price
-  } catch {
-    console.log('Failed to get mark price for positionId: ', positionId)
+  } catch (e) {
+    console.error(e)
     return 0n
   }
 
@@ -137,7 +144,7 @@ export const getMarkPrice = async ({ chainId, positionId, blockNumber, debtToken
 
 const getInstrument = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext; }) => {
   const instrumentId = positionId.slice(0, 34) as Hex
-  const cached = Cache.init({ category: CacheCategory.Instrument, chainId })
+  const cached = await Cache.init({ category: CacheCategory.Instrument, chainId })
   const instrument = cached.read(instrumentId)
   if (instrument) return instrument
 

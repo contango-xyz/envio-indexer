@@ -1,7 +1,16 @@
+import { Hex } from "viem";
 import { AccountingType, GenericEvent } from "../accounting/lotsAccounting";
 import { EventType } from "./types";
 
 export const createIdForPosition = ({ chainId, positionId }: Pick<GenericEvent, 'chainId'> & { positionId: string; }): `${number}_${string}` => `${chainId}_${positionId.toLowerCase()}`
+
+// important: this is not the same as `positionId` that we're used to. This is the ID of the entity in the database, and includes the chainId
+export type IdForPosition = ReturnType<typeof createIdForPosition>
+
+export const decodeIdForPosition = (id: IdForPosition) => {
+  const [chainId, positionId] = id.split('_')
+  return { chainId: parseInt(chainId), positionId: positionId as Hex }
+}
 
 export const createEventId = <T extends EventType>(
   { chainId, block: { number: blockNumber }, transaction: { hash: transactionHash }, logIndex, eventType }: GenericEvent & { eventType: T; }

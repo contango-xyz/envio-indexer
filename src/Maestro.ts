@@ -4,6 +4,19 @@ import { eventStore } from "./Store";
 import { getOrCreateToken } from "./utils/getTokenDetails";
 import { createEventId } from "./utils/ids";
 import { EventType } from "./utils/types";
+import { getContract } from "viem";
+import { clients } from "./clients";
+import { maestroAbi } from "./abis";
+import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
+
+Maestro.Upgraded.contractRegister(async ({ event, context }) => {
+  if (event.block.number >= getIMoneyMarketEventsStartBlock(event.chainId)) {
+    const contract = getContract({ address: event.srcAddress as `0x${string}`, abi: maestroAbi, client: clients[event.chainId] })
+    const simpleSpotExecutor = await contract.read.spotExecutor({ blockNumber: BigInt(event.block.number)})
+    console.log('Maestro simpleSpotExecutor updated', simpleSpotExecutor, event.chainId, event.block.number)
+    context.addSimpleSpotExecutor(simpleSpotExecutor)
+  }
+})
 
 Maestro.FeeCollected.handler(async ({ event, context }) => {
   const snapshot = await eventStore.getCurrentPositionSnapshot({ event, context })

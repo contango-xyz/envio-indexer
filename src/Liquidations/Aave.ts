@@ -11,12 +11,12 @@ import { GenericEvent } from "../accounting/lotsAccounting";
 import { eventsReducer } from "../accounting/processEvents";
 import { clients } from "../clients";
 import { eventStore } from "../Store";
-import { getBalancesAtBlock, getMarkPrice } from "../utils/common";
+import { getInterestToSettleOnLiquidation } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { positionIdMapper } from "../utils/mappers";
-import { max, mulDiv } from "../utils/math-helpers";
+import { mulDiv } from "../utils/math-helpers";
 import { EventType } from "../utils/types";
-import { getLiquidationPenalty, getPositionIdForProxyAddress } from "./common";
+import { getPositionIdForProxyAddress } from "./common";
 
 // Aave
 export function getLiquidationBonus(data: bigint): bigint {
@@ -55,10 +55,16 @@ export const processAaveLiquidationEvents = async (
   const client = clients[chainId]
 
   const pool = getContract({ abi: aaveAbi, address: liquidationContractAddress as Hex, client })
-  const { data } = await pool.read.getConfiguration([collateralAsset], { blockNumber: BigInt(blockNumber) })
-
-  const liquidationBonus = getLiquidationBonus(data) - BigInt(1e4) // e.g. from 105% to 5%
-  const liquidationProtocolFeePercentage = isV3 ? getLiquidationProtocolFee(data) : 0n
+  let liquidationBonus = 0n
+  let liquidationProtocolFeePercentage = 0n
+  try {
+    const { data } = await pool.read.getConfiguration([collateralAsset], { blockNumber: BigInt(blockNumber) })
+    liquidationBonus = getLiquidationBonus(data) - BigInt(1e4) // e.g. from 105% to 5%
+    liquidationProtocolFeePercentage = isV3 ? getLiquidationProtocolFee(data) : 0n
+  } catch (e) {
+    console.log(`Unable to look up reserve configuration for collateral asset ${collateralAsset} on chainId: ${chainId}. Setting liquidation bonus and protocol fee to 0.`)
+    throw e
+  }
 
   const normalisedProtocolFeePercentage = mulDiv(liquidationProtocolFeePercentage, liquidationBonus, BigInt(1e4))
 
@@ -91,11 +97,9 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
       console.error(`no snapshot found for positionId: ${positionId} - chainId: ${event.chainId}`, event)
       return
     }
-    const { position, debtToken, collateralToken } = snapshot
-    const [balancesBefore, markPrice] = await Promise.all([
-      getBalancesAtBlock(event.chainId, positionId, event.block.number - 1),
-      getMarkPrice({ chainId: event.chainId, positionId, blockNumber: event.block.number, debtToken })
-    ])
+    const { position } = snapshot
+    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
+
     const aaveLiquidationEvent = await processAaveLiquidationEvents({
       chainId: event.chainId,
       positionId,
@@ -109,8 +113,6 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
     })
 
     try {
-      const lendingProfitToSettle = max(balancesBefore.collateral - position.collateral, 0n)
-      const debtCostToSettle = max(balancesBefore.debt - position.debt, 0n)
   
       const liquidationEvent: ContangoLiquidationEvent = {
         ...aaveLiquidationEvent,
@@ -118,13 +120,6 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
         blockTimestamp: event.block.timestamp,
         debtCostToSettle,
         transactionHash: event.transaction.hash,
-        liquidationPenalty: getLiquidationPenalty({
-          collateralToken,
-          collateralDelta: aaveLiquidationEvent.collateralDelta,
-          debtDelta: aaveLiquidationEvent.debtDelta,
-          markPrice,
-        }),
-        markPrice,
       }
       context.ContangoLiquidationEvent.set(liquidationEvent)
       eventStore.addLog({ event: { ...event, params: { positionId } }, contangoEvent: { ...liquidationEvent, eventType: EventType.LIQUIDATION } })
@@ -132,7 +127,7 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
       await eventsReducer({ ...snapshot, context })
     } catch (e) {
       console.error(e)
-      context.log.debug(`Error processing liquidation for positionId: ${positionId} balancesBefore: ${balancesBefore.collateral} ${balancesBefore.debt} position: ${position.collateral} ${position.debt}`)
+      context.log.debug(`Error processing liquidation for positionId: ${positionId} lendingProfitToSettle: ${lendingProfitToSettle} debtCostToSettle: ${debtCostToSettle}`)
     }
 
   }

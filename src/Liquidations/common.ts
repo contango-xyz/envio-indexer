@@ -1,7 +1,7 @@
 import { handlerContext, Token } from "generated/src/Types.gen";
 import { Hex } from "viem";
 import { createUnderlyingPositionId } from "../ContangoProxy";
-import { max, mulDiv } from "../utils/math-helpers";
+import { mulDiv } from "../utils/math-helpers";
 
 export const getPositionIdForProxyAddress = async ({ chainId, user, context }: { chainId: number; user: string; context: handlerContext; }) => {
   const underlyingPosition = await context.UnderlyingPositionFactory_UnderlyingPositionCreated.get(createUnderlyingPositionId({ chainId, proxyAddress: user }))
@@ -9,7 +9,7 @@ export const getPositionIdForProxyAddress = async ({ chainId, user, context }: {
   return underlyingPosition.contangoPositionId as Hex
 }
 
-export const getLiquidationPenalty = ({ collateralToken, collateralDelta, debtDelta, markPrice }: { collateralToken: Token; collateralDelta: bigint; debtDelta: bigint; markPrice: bigint; }) => {
+export const getLiquidationPenalty = ({ collateralToken, collateralDelta, debtDelta, referencePrice }: { collateralToken: Token; collateralDelta: bigint; debtDelta: bigint; referencePrice: bigint; }) => {
   const effectivePrice = mulDiv(debtDelta, collateralToken.unit, collateralDelta) // quote unit of instrument
-  return max(mulDiv(markPrice, BigInt(1e4), effectivePrice) - BigInt(1e4), 0n)
+  return mulDiv(referencePrice, BigInt(1e4), effectivePrice) - BigInt(1e4)
 }
