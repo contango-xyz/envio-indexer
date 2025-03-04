@@ -55,16 +55,14 @@ export const processAaveLiquidationEvents = async (
   const client = clients[chainId]
 
   const pool = getContract({ abi: aaveAbi, address: liquidationContractAddress as Hex, client })
-  let liquidationBonus = 0n
-  let liquidationProtocolFeePercentage = 0n
+  let data = 0n
   try {
-    const { data } = await pool.read.getConfiguration([collateralAsset], { blockNumber: BigInt(blockNumber) })
-    liquidationBonus = getLiquidationBonus(data) - BigInt(1e4) // e.g. from 105% to 5%
-    liquidationProtocolFeePercentage = isV3 ? getLiquidationProtocolFee(data) : 0n
-  } catch (e) {
-    console.log(`Unable to look up reserve configuration for collateral asset ${collateralAsset} on chainId: ${chainId}. Setting liquidation bonus and protocol fee to 0.`)
-    throw e
+    data = (await pool.read.getConfiguration([collateralAsset], { blockNumber: BigInt(blockNumber) })).data
+  } catch {
+    data = (await pool.read.getConfiguration([collateralAsset])).data
   }
+  const liquidationBonus = getLiquidationBonus(data) - BigInt(1e4) // e.g. from 105% to 5%
+  const liquidationProtocolFeePercentage = isV3 ? getLiquidationProtocolFee(data) : 0n
 
   const normalisedProtocolFeePercentage = mulDiv(liquidationProtocolFeePercentage, liquidationBonus, BigInt(1e4))
 
