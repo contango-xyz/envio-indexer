@@ -6,6 +6,8 @@ import { contangoAbi, iMoneyMarketAbi, liquidationsAbi, maestroAbi, positionNftA
 import { clients } from '../src/clients'
 import { createIdForPosition, decodeIdForPosition, IdForPosition } from '../src/utils/ids'
 import { positionIdMapper } from '../src/utils/mappers'
+import { FillItemType } from '../src/utils/types'
+import { expect } from 'chai'
 
 const {
   ContangoProxy,
@@ -337,13 +339,15 @@ export const processTransaction = async (id: IdForPosition, transactionHash: str
         })
         break
       }
-      case 'EndStrategy': {
-        mockDb = await StrategyProxy.EndStrategy.processEvent({
-          event: { ...event, params: event.args },
-          mockDb
-        })
-        break
-      }
+      // the end strategy event is not needed because we always call it below anyways. doing this here would just double the processing time
+
+      // case 'EndStrategy': {
+      //   mockDb = await StrategyProxy.EndStrategy.processEvent({
+      //     event: { ...event, params: event.args },
+      //     mockDb
+      //   })
+      //   break
+      // }
       case 'AbsorbCollateral': {
         mockDb = await CometLiquidations.AbsorbCollateral.processEvent({
           event: { ...event, params: event.args },
@@ -432,6 +436,20 @@ export const processTransaction = async (id: IdForPosition, transactionHash: str
     mockDb = await runProcessing({ mockDb, positionId, chainId, transactionHash, blockNumber: Number(blockNumber), from, to })
   } else {
     throw new Error('Position ID not found')
+  }
+
+  const fillItems = mockDb.entities.FillItem.getAll()
+  const fillItem = fillItems[fillItems.length - 1]
+
+  if (fillItems.length === 1) {
+    expect(fillItem.fillItemType).to.equal(FillItemType.Opened)
+  } else {
+    expect(fillItem.fillItemType).to.not.equal(FillItemType.Opened)
+  }
+
+  if (fillItem.fillItemType === FillItemType.Opened) {
+    if (fillItem.lendingProfitToSettle > 0n) throw new Error('Lending profit to settle is greater than 0')
+    if (fillItem.debtCostToSettle > 0n) throw new Error('Debt cost to settle is greater than 0')
   }
 
   return mockDb

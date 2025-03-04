@@ -38,4 +38,5 @@ export const ADDRESSES = {
   maestroProxy: '0xa6a147946facac9e0b99824870b36088764f969f',
   vaultProxy: '0x3f37c7d8e61c000085aac0515775b06a3412f36b',
   lens: '0xe03835Dfae2644F37049c1feF13E8ceD6b1Bb72a',
+  taxMan: '0xfee97c6f9bce786a08b1252eac9223057508c760'
 } as const

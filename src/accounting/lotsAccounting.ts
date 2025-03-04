@@ -1,8 +1,9 @@
 import { genericEvent } from "envio/src/Internal.gen";
 import { FillItem, Lot, Position, handlerContext } from 'generated';
 import { createIdForLot } from "../utils/ids";
-import { max, mulDiv } from "../utils/math-helpers";
+import { max, min, mulDiv } from "../utils/math-helpers";
 import { Mutable } from "../utils/types";
+import { PartialFillItem } from "./helpers";
 
 export enum AccountingType {
   Long = 'Long',
@@ -84,17 +85,15 @@ export const allocateFundingProfitToLots = async ({ lots, fundingProfitToSettle 
 
 export const handleCloseSize = ({
   position,
-  fillItem,
+  partialFillItem,
   lots,
-  accountingType,
   sizeDelta,
   closedCostRef,
   ...event
 }: GenericEvent & {
-  fillItem: Mutable<Pick<FillItem, 'realisedPnl_short' | 'realisedPnl_long' | 'cashflowBase'>>;
+  partialFillItem: PartialFillItem;
   position: Position;
   lots: Mutable<Lot>[];
-  accountingType: AccountingType;
   sizeDelta: bigint;
   closedCostRef: Mutable<{ value: bigint }>;
 }) => {
@@ -104,7 +103,7 @@ export const handleCloseSize = ({
   return lots.map((lot) => {
     if (remainingSizeDelta === 0n) return lot
     const newLot = { ...lot }
-    const closedSize = max(-lot.size, remainingSizeDelta)
+    const closedSize = remainingSizeDelta > 0n ? min(-lot.size, remainingSizeDelta) : max(-lot.size, remainingSizeDelta)
     const grossClosedSize = mulDiv(closedSize, lot.grossSize, lot.size)
 
     newLot.size += closedSize
@@ -127,18 +126,12 @@ export const handleCloseSize = ({
 
 }
 
-export const handleCostDelta = ({ lots, fillItem, costDelta, accountingType }: { fillItem: Mutable<Pick<FillItem, 'realisedPnl_short' | 'realisedPnl_long' | 'cashflowBase'>>; lots: Mutable<Lot>[]; costDelta: bigint; accountingType: AccountingType }) => {
+export const handleCostDelta = ({ lots, costDelta }: { lots: Mutable<Lot>[]; costDelta: bigint;}) => {
   if (costDelta > 0n) {
     const unchangedLots = lots.slice(0, lots.length - 1)
     const lastLot = lots[lots.length - 1]
     if (!lastLot) return lots
     return [...unchangedLots, { ...lastLot, openCost: lastLot.openCost + costDelta, grossOpenCost: lastLot.grossOpenCost + costDelta }]
-  } else {
-    if (accountingType === AccountingType.Long) {
-      fillItem.realisedPnl_long -= costDelta
-    } else {
-      fillItem.realisedPnl_short -= costDelta
-    }
   }
 
   return lots
@@ -158,15 +151,17 @@ export const saveLots = async ({ lots, context }: { lots: Lot[]; context: handle
   const openIds = new Set<Lot['id']>(openLots.map(lot => lot.id))
 
   for (const lot of lots) {
-    if (!openIds.has(lot.id)) {
+    if (!openIds.has(lot.id) && lot.id !== 'unknown') {
       context.Lot.deleteUnsafe(lot.id)
     }
   }
 
   await Promise.all(openLots.map((lot) => context.Lot.set(lot)))
+
+  return openLots
 }
 
 export const savePosition = async ({ position, lots, context }: { position: Position; lots: Lot[]; context: handlerContext }) => {
-  await saveLots({ lots, context })
-  context.Position.set({ ...position, lotCount: lots.length })
+  const savedLots = await saveLots({ lots, context })
+  context.Position.set({ ...position, lotCount: savedLots.length })
 }

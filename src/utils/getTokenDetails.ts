@@ -87,7 +87,7 @@ const getTokenDetails = async (address: string, chainId: number) => {
       ];
     } catch (alternateError) {
       results = [0,"unknown","unknown"];
-      console.error(`Alternate method failed for token ${address}:`);
+      throw new Error(`Failed to get token details for ${address}: ${alternateError}`)
     }
   }
 

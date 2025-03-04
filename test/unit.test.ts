@@ -23,6 +23,10 @@ const getFeeEventMaybe = (events: ReturnPromiseType<typeof getTransactionEvents>
   return null
 }
 
+const toThreeDecimals = (value: bigint, unit = 1e18) => {
+  return Number(Number(value) / Number(unit)).toFixed(3)
+}
+
 const getSwapEventMaybe = (events: ReturnPromiseType<typeof getTransactionEvents>) => {
   const [swapEventMaybe] = events.filter(event => event?.eventName === 'SwapExecuted')
   if (swapEventMaybe) return { ...swapEventMaybe, params: swapEventMaybe.args } as unknown as SpotExecutor_SwapExecuted_event
@@ -46,7 +50,7 @@ describe('indexer tests', () => {
     return { debtToken, collateralToken }
   }
 
-  async function highLevelInvariants(id: IdForPosition) {
+  async function highLevelInvariants(id: IdForPosition, label = '') {
     const position = mockDb.entities.Position.get(id)
     if (!position) throw new Error('Position not found in test!')
     const fillItems = mockDb.entities.FillItem.getAll()
@@ -59,6 +63,7 @@ describe('indexer tests', () => {
     expect(position.cashflowQuote).to.equal(aggregatedQuoteCashflow)
     expect(position.cashflowBase).to.equal(aggregatedBaseCashflow)
     expect(lots.length).to.equal(0)
+    expect(position.lotCount).to.equal(0)
 
     for (const fillItem of fillItems) {
       const longTimesShort = mulDiv(fillItem.referencePrice_long, fillItem.referencePrice_short, debtToken.unit)
@@ -73,6 +78,8 @@ describe('indexer tests', () => {
     // any closed position should have realised pnl
     expect(position.realisedPnl_long).to.not.equal(0n)
     expect(position.realisedPnl_short).to.not.equal(0n)
+
+    return position
   }
 
   async function highLevelInvariantsForLiquidation(id: IdForPosition) {
@@ -96,17 +103,12 @@ describe('indexer tests', () => {
       const asNumber = Number(longTimesShort) / Number(collateralToken.unit)
       expect(asNumber).to.approximately(1, 0.001)
 
-      if (fillItem.fillItemType === FillItemType.ClosedByLiquidation || fillItem.fillItemType === FillItemType.Liquidated) {
+      if (fillItem.fillItemType === FillItemType.LiquidatedFull || fillItem.fillItemType === FillItemType.LiquidatedPartial) {
         liquidationPenaltyBase += mulDiv(fillItem.realisedPnl_short, fillItem.liquidationPenalty, BigInt(1e4))
         liquidationPenaltyQuote += mulDiv(fillItem.realisedPnl_long, fillItem.liquidationPenalty, BigInt(1e4))
       }
     }
 
-    const fillItemTypes = fillItems.map(fillItem => fillItem.fillItemType)
-
-    // expect(liquidationPenaltyBase).to.not.equal(0n)
-    // expect(liquidationPenaltyQuote).to.not.equal(0n)
-    
     expect((Number(position.realisedPnl_long) / Number(debtToken.unit)).toFixed(3)).to.equal((Number(position.cashflowQuote) / Number(debtToken.unit) * -1).toFixed(3))
     expect((Number(position.realisedPnl_short) / Number(collateralToken.unit)).toFixed(3)).to.equal((Number(position.cashflowBase) / Number(collateralToken.unit) * -1).toFixed(3))
   }
@@ -584,10 +586,10 @@ describe('indexer tests', () => {
       } else if (i === 1) {
         // this position has debt, and hence a short lot
         expect(position.realisedPnl_long).to.not.equal(0n)
-        expect(position.realisedPnl_short).to.equal(155n)
-        expect(fillItem.realisedPnl_short).to.equal(155n)
+        expect(position.realisedPnl_short).to.equal(0n)
+        expect(fillItem.realisedPnl_short).to.equal(0n)
         expect(fillItem.fillCost_short).to.equal(155n) // precision error
-        expect(fillItem.fillPrice_short).to.equal(191549n)
+        expect(fillItem.fillPrice_short).to.equal(0n)
         expect(fillItem.fillItemType).to.equal(FillItemType.Closed)
       }
     }
@@ -621,7 +623,7 @@ describe('indexer tests', () => {
       const fillItem = fillItems[i]
 
       if (i === 0) {
-        expect(fillItem.cashflow).to.equal(BigInt(0.02e18))
+        expect(fillItem.cashflow).to.equal(BigInt(0.02e18)) // 0.02 ETH
         expect(fillItem.cashflowQuote).to.equal(BigInt(68.027973e6))
         expect(fillItem.cashflowBase).to.equal(80735499391093514082n) // 80.735
         expect(fillItem.referencePrice_long).to.equal(BigInt(0.842603e6))
@@ -639,7 +641,8 @@ describe('indexer tests', () => {
         expect(fillItem.referencePrice_long).to.equal(BigInt(0.843980e6))
         expect(fillItem.fillPrice_long).to.equal(BigInt(0.843980e6))
 
-        expect(fillItem.referencePrice_short).to.equal(1184862200526078817n) // 1 / 0.842603 = 1.18486 (the inverse of the long trade price)
+        expect(fillItem.referencePrice_short).to.equal(1184861656014328796n) // 1 / 0.842603 = 1.18486 (the inverse of the long trade price)
+        expect(fillItem.referencePriceSource).to.equal(ReferencePriceSource.SwapPrice)
         expect(fillItem.fillPrice_short).to.equal(1184861653848222336n) // 1 / 0.842603 = 1.18486 (the inverse of the long trade price)
 
         expect(fillItem.realisedPnl_long).to.equal(222214n) // sum of quote cashflows
@@ -648,6 +651,239 @@ describe('indexer tests', () => {
     }
 
     await highLevelInvariants(id)
+  })
+
+  it('USDT/USDC - Arbitrum - Using new events (OPEN->REDUCE->CLOSE)', async function() {
+    this.timeout(30000)
+    const id = createIdForPosition({ chainId: 42161, positionId: '0x55534454555344432e6e00000000000011ffffffff00000000000000000058a8' })
+    const transactionHashes = await getTransactionHashes(id)
+
+    for (let i = 0; i < transactionHashes.length; i++) {
+      mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+
+      const position = mockDb.entities.Position.get(id)
+      if (!position) throw new Error('Position not found in test!')
+      const lots = mockDb.entities.Lot.getAll()
+      const fillItems = mockDb.entities.FillItem.getAll()
+      const fillItem = fillItems[i]
+
+      if (i === 0) {
+        expect(lots.length).to.equal(2)
+        expect(position.lotCount).to.equal(2)
+
+        const [longLot] = lots.filter(lot => lot.accountingType === AccountingType.Long)
+        const [shortLot] = lots.filter(lot => lot.accountingType === AccountingType.Short)
+
+        // assert debt values and short lot size
+        expect(fillItem.debtDelta).to.equal(BigInt(498.75e6))
+        expect(shortLot.size).to.equal(-fillItem.debtDelta) // short 498.75 USDC ==> size is negative
+        expect(position.debt).to.equal(fillItem.debtDelta)
+        expect(fillItem.debtCostToSettle).to.equal(0n)
+
+        // assert collateral values and long lot size
+        expect(fillItem.collateralDelta).to.equal(BigInt(598.508620e6))
+        expect(longLot.size).to.equal(fillItem.collateralDelta) // long 598.508620 USDT ==> size is positive
+        expect(position.collateral).to.equal(fillItem.collateralDelta)
+        expect(fillItem.lendingProfitToSettle).to.equal(0n)
+
+        // assert cost
+        expect(position.longCost).to.equal(BigInt(-598.5e6))
+        expect(position.longCost).to.equal(longLot.openCost)
+        expect(position.longCost).to.equal(fillItem.fillCost_long)
+
+        expect(position.shortCost).to.equal(BigInt(498.757123e6))
+        expect(position.shortCost).to.equal(shortLot.openCost)
+        expect(shortLot.openCost).to.equal(fillItem.fillCost_short)
+
+        // assert cashflows
+        expect(fillItem.cashflow).to.equal(BigInt(100e6)) // USDC
+        expect(fillItem.cashflowQuote).to.equal(BigInt(99.75e6)) // USDC (these values are without fees. they're only used for accounting purposes)
+        expect(fillItem.cashflowBase).to.equal(99751497n) // 99.751497 USDT
+
+        // assert reference prices (these are the prices used for valuing cashflows from one ccy to another and hence critical for accounting)
+        expect(fillItem.referencePriceSource).to.equal(ReferencePriceSource.SwapPrice)
+        expect(toThreeDecimals(mulDiv(fillItem.referencePrice_short, fillItem.cashflowQuote, BigInt(1e6)))).to.equal(toThreeDecimals(fillItem.cashflowBase))
+        expect(toThreeDecimals(mulDiv(fillItem.referencePrice_long, fillItem.cashflowBase, BigInt(1e6)))).to.equal(toThreeDecimals(fillItem.cashflowQuote))
+        
+        expect(longLot.openCost).to.equal(-fillItem.debtDelta + -fillItem.cashflowQuote) // 498.75 + 99.75 = 598.50
+        expect(shortLot.openCost).to.equal(fillItem.collateralDelta - fillItem.cashflowBase) // 598.508620 - 99.751497 = 498.757123
+
+        // because it's the first fill, the gross values should equal the net values
+        expect(longLot.grossOpenCost).to.equal(longLot.openCost)
+        expect(longLot.grossSize).to.equal(longLot.size)
+        expect(shortLot.grossOpenCost).to.equal(shortLot.openCost)
+        expect(shortLot.grossSize).to.equal(shortLot.size)
+      } else if (i === 1) {
+        // this fill is a partial close
+        expect(lots.length).to.equal(2)
+        expect(position.lotCount).to.equal(2)
+        const previousFillItem = fillItems[i - 1]
+
+        const [longLot] = lots.filter(lot => lot.accountingType === AccountingType.Long)
+        const [shortLot] = lots.filter(lot => lot.accountingType === AccountingType.Short)
+
+        // assert debt values and short lot size
+        expect(fillItem.debtDelta).to.equal(BigInt(-231.925250e6))
+        const expectedShortLotSize = -previousFillItem.debtDelta - fillItem.debtCostToSettle - fillItem.debtDelta
+        expect(shortLot.size).to.equal(expectedShortLotSize) // short 498.75 USDC ==> size is negative
+        expect(position.debt).to.equal(previousFillItem.debtDelta + fillItem.debtDelta)
+        expect(position.accruedDebtCost).to.equal(fillItem.debtCostToSettle)
+        expect(fillItem.debtCostToSettle).to.equal(1015n) // 0.001015 USDC in interest accumulated since opening the position
+
+        // assert collateral values and long lot size
+        expect(fillItem.collateralDelta).to.equal(BigInt(-202.013204e6))
+        const expectedLongLotSize = previousFillItem.collateralDelta + fillItem.lendingProfitToSettle + fillItem.collateralDelta
+        expect(longLot.size).to.equal(expectedLongLotSize)
+        expect(position.collateral).to.equal(previousFillItem.collateralDelta + fillItem.collateralDelta)
+        expect(fillItem.lendingProfitToSettle).to.equal(4266n) // 0.004266 USDT in lending profit accumulated since opening the position
+        expect(position.accruedLendingProfit).to.equal(fillItem.lendingProfitToSettle)
+
+        // assert cost
+        expect(fillItem.fillCost_long).to.equal(BigInt(202.041156e6)) // debtDelta + cashflowQuote
+        expect(fillItem.fillCost_short).to.equal(BigInt(-231.893174e6)) // debtDelta in base ccy terms (aka collateralDelta - cashflowBase)
+        expect(position.longCost).to.equal(BigInt(-396.491818e6))
+        expect(position.shortCost).to.equal(BigInt(266.831315e6))
+        expect(position.longCost).to.equal(longLot.openCost)
+        expect(position.shortCost).to.equal(shortLot.openCost)
+
+        // previous size was roughly 600, now we're closing roughly 200 (1/3rd)
+        // previous open cost long was roughly 598.5, we should be closing 1/3rd of that so ca. 200
+        const openCostRightBeforeTrade = previousFillItem.fillCost_long - fillItem.debtCostToSettle
+        expect(openCostRightBeforeTrade).to.equal(BigInt(-598.501015e6)) // previous open cost + accrued debt cost
+
+        const sizeRightBeforeTrade = previousFillItem.collateralDelta + fillItem.lendingProfitToSettle
+        expect(sizeRightBeforeTrade).to.equal(BigInt(598.512886e6))
+
+        const closedCostLong = mulDiv(openCostRightBeforeTrade, fillItem.collateralDelta, sizeRightBeforeTrade)
+        expect(closedCostLong).to.equal(BigInt(202.009197e6)) // makes sense
+
+        const expectedPnl_long = fillItem.fillCost_long - closedCostLong
+        expect(fillItem.realisedPnl_long).to.equal(expectedPnl_long)
+        expect(fillItem.realisedPnl_long).to.equal(31959n) // 0.031959 USDC
+
+        // do the same but for the short lot
+        const shortOpenCostRightBeforeTrade = previousFillItem.fillCost_short + fillItem.lendingProfitToSettle
+        expect(shortOpenCostRightBeforeTrade).to.equal(BigInt(498.761389e6)) // previous short open cost + accrued debt cost
+
+        const shortSizeRightBeforeTrade = -previousFillItem.debtDelta - fillItem.debtCostToSettle
+        expect(shortSizeRightBeforeTrade).to.equal(BigInt(-498.751015e6)) // previous short size (-498.75) - accured debt (0.001015)
+
+        const closedCostShort = mulDiv(shortOpenCostRightBeforeTrade, fillItem.debtDelta, shortSizeRightBeforeTrade)
+        expect(closedCostShort).to.equal(BigInt(231.930074e6)) // makes sense
+
+        const expectedPnl_short = fillItem.fillCost_short + closedCostShort
+        expect(fillItem.realisedPnl_short).to.equal(expectedPnl_short)
+        expect(fillItem.realisedPnl_short).to.equal(36900n) // 0.036900 USDT
+
+        // assert cashflows
+        expect(fillItem.cashflow).to.equal(BigInt(30e6)) // USDC
+        expect(fillItem.cashflowQuote).to.equal(fillItem.cashflow - fillItem.fee) // USDC (these values are without fees. they're only used for accounting purposes)
+        expect(fillItem.cashflowBase).to.equal(BigInt(29.879970e6)) // 29.879970 USDT
+
+        // assert reference prices (these are the prices used for valuing cashflows from one ccy to another and hence critical for accounting)
+        expect(fillItem.referencePriceSource).to.equal(ReferencePriceSource.SwapPrice)
+        expect(toThreeDecimals(mulDiv(fillItem.referencePrice_short, fillItem.cashflowQuote, BigInt(1e6)))).to.equal(toThreeDecimals(fillItem.cashflowBase))
+        expect(toThreeDecimals(mulDiv(fillItem.referencePrice_long, fillItem.cashflowBase, BigInt(1e6)))).to.equal(toThreeDecimals(fillItem.cashflowQuote))
+      } else if (i === 2) {
+        // this fill is a full close
+        expect(lots.length).to.equal(0)
+        expect(position.lotCount).to.equal(0)
+        const previousFillItem = fillItems[i - 1]
+        // assert debt values and short lot size
+        expect(fillItem.debtDelta).to.equal(BigInt(-266.996703e6))
+        expect(position.debt).to.equal(fillItems.reduce((acc, curr) => acc + curr.debtDelta, 0n))
+        expect(position.accruedDebtCost).to.equal(fillItems.reduce((acc, curr) => acc + curr.debtCostToSettle, 0n))
+        expect(position.accruedDebtCost + position.debt).to.equal(0n)
+
+        // assert collateral values and long lot size
+        expect(fillItem.collateralDelta).to.equal(BigInt(-396.727943e6))
+        expect(position.collateral).to.equal(fillItems.reduce((acc, curr) => acc + curr.collateralDelta, 0n))
+        expect(position.accruedLendingProfit).to.equal(fillItems.reduce((acc, curr) => acc + curr.lendingProfitToSettle, 0n))
+        expect(position.accruedLendingProfit + position.collateral).to.equal(0n)
+
+        // assert cost
+        expect(fillItem.fillCost_long).to.equal(BigInt(396.432347e6)) // debtDelta + cashflowQuote
+        expect(fillItem.fillCost_short).to.equal(BigInt(-267.195799e6)) // debtDelta in base ccy terms (aka collateralDelta - cashflowBase)
+
+        const openCostRightBeforeTrade = BigInt(-396.491818e6) - fillItem.debtCostToSettle // number comes from assertion in previous fill
+        expect(openCostRightBeforeTrade).to.equal(BigInt(-396.662756e6)) // previous open cost + accrued debt cost
+
+        const sizeRightBeforeTrade = fillItems.slice(0, i).reduce((acc, curr) => acc + (curr.collateralDelta + curr.lendingProfitToSettle), 0n) + fillItem.lendingProfitToSettle
+        expect(sizeRightBeforeTrade).to.equal(BigInt(396.727943e6))
+
+        const closedCostLong = mulDiv(openCostRightBeforeTrade, fillItem.collateralDelta, sizeRightBeforeTrade)
+        expect(closedCostLong).to.equal(BigInt(396.662756e6))
+        expect(closedCostLong).to.equal(-openCostRightBeforeTrade) // closed cost should be exactly the opposite to the open cost right before the trade
+
+        const expectedPnl_long = fillItem.fillCost_long - closedCostLong
+        expect(fillItem.realisedPnl_long).to.equal(expectedPnl_long)
+        expect(fillItem.realisedPnl_long).to.equal(BigInt(-0.230409e6)) // previous fill pnl was: 0.031959 -> total: 0.031959 - 0.230409 = -0.198450
+        expect(position.realisedPnl_long).to.equal(BigInt(-0.198450e6))
+
+        // do the same but for the short lot
+        const shortOpenCostRightBeforeTrade = BigInt(266.831315e6) + fillItem.lendingProfitToSettle
+        expect(shortOpenCostRightBeforeTrade).to.equal(BigInt(267.059576e6)) // previous short open cost + accrued debt cost
+
+        const shortSizeRightBeforeTrade = -fillItems.slice(0, i).reduce((acc, curr) => acc + (curr.debtDelta + curr.debtCostToSettle), 0n) - fillItem.debtCostToSettle
+        expect(shortSizeRightBeforeTrade).to.equal(BigInt(-266.996703e6))
+
+        const closedCostShort = mulDiv(shortOpenCostRightBeforeTrade, fillItem.debtDelta, shortSizeRightBeforeTrade)
+        expect(closedCostShort).to.equal(BigInt(267.059576e6))
+
+        const expectedPnl_short = fillItem.fillCost_short + closedCostShort
+        expect(fillItem.realisedPnl_short).to.equal(expectedPnl_short)
+        expect(fillItem.realisedPnl_short).to.equal(BigInt(-0.136223e6)) // previous fill short pnl was: 0.0369 -> total: 0.0369 - 0.136223 = -0.099323
+        expect(position.realisedPnl_short).to.equal(BigInt(-0.099323e6))
+
+        // assert cashflows
+        expect(fillItem.cashflow).to.equal(BigInt(-129.302146e6)) // USDC
+        expect(fillItem.cashflowQuote).to.equal(fillItem.cashflow - fillItem.fee) // USDC (these values are without fees. they're only used for accounting purposes)
+        expect(fillItem.cashflowBase).to.equal(BigInt(-129.532144e6)) // 29.879970 USDT
+
+        // assert reference prices (these are the prices used for valuing cashflows from one ccy to another and hence critical for accounting)
+        expect(fillItem.referencePriceSource).to.equal(ReferencePriceSource.SwapPrice)
+        expect(toThreeDecimals(mulDiv(fillItem.referencePrice_short, fillItem.cashflowQuote, BigInt(1e6)))).to.equal(toThreeDecimals(fillItem.cashflowBase))
+        expect(toThreeDecimals(mulDiv(fillItem.referencePrice_long, fillItem.cashflowBase, BigInt(1e6)))).to.equal(toThreeDecimals(fillItem.cashflowQuote))
+      }
+    }
+
+    // simplified version of the above (redundant but good for documentation)
+    const fillItems = mockDb.entities.FillItem.getAll()
+    const position = mockDb.entities.Position.get(id)
+    if (!position) throw new Error('Position not found in test!')
+
+    // all user cashflows are in USDC. He first puts 100, then adds 30, then closes with -129.302146
+    const totalCashflows = fillItems.reduce((acc, curr) => acc + curr.cashflow, 0n) // 100 + 30 + -129.302146 = 0.697854
+    // user pays fees in USDC too. first 0.25, then 0.115906, then 0.133498 on closing
+    const totalFees = fillItems.reduce((acc, curr) => acc + curr.fee, 0n) //  0.25 + 0.115906 + 0.133498 = 0.499404
+
+    expect(position.realisedPnl_long).to.equal(-totalCashflows + totalFees)
+    await highLevelInvariants(id, 'working')
+  })
+
+  describe('High level invariants', () => {
+    // only positions that have been closed, and have not been liquidated at all should be tested here
+    const highLevelInvariantTestCases = [
+      createIdForPosition({ chainId: 1, positionId: '0x4141564555534443000000000000000001ffffffff0000000000000000000304' }),
+      createIdForPosition({ chainId: 42161, positionId: '0x5745544855534443000000000000000001ffffffff00000000000000000057f8' }),
+    ]
+
+    highLevelInvariantTestCases.forEach((id) => {
+      it(`${id}`, async function() {
+        this.timeout(30000)
+        const transactionHashes = await getTransactionHashes(id)    
+        for (let i = 0; i < transactionHashes.length; i++) {
+          mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+          // const fillItems = mockDb.entities.FillItem.getAll()
+          // const position = mockDb.entities.Position.get(id)
+          // if (!position) throw new Error('Position not found in test!')
+          // const fillItem = fillItems[i]
+          // console.log('fillItem', fillItem)
+          // console.log('position', position)
+        }
+        await highLevelInvariants(id, 'failing')
+      })
+    })
   })
 
   describe('Liquidations', () => {

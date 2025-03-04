@@ -72,7 +72,6 @@ type FillItem {
   fee_long: BigInt! # fee in debt ccy
   fee_short: BigInt! # fee in collateral ccy
 
-  dust: BigInt!
 }
 
 type Position {
@@ -88,10 +87,10 @@ type Position {
   moneyMarket: Int! @index
   number: Int!
 
-  collateral: BigInt! # this is the sum of the collateral deltas of all fills
+  collateral: BigInt! # this is the sum of the collateral deltas of all fills (not including accrued lending profit)
   accruedLendingProfit: BigInt! # this is the collateral balance with lending profit included
 
-  debt: BigInt! # this is the sum of the debt deltas of all fills
+  debt: BigInt! # this is the sum of the debt deltas of all fills (not including accrued debt cost)
   accruedDebtCost: BigInt! # this is the debt balance with interest accrued included
 
   cashflowBase: BigInt! # sum of all cashflows in base ccy (absolute value, not "relative")
