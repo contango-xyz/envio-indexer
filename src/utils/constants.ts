@@ -1,5 +1,6 @@
 import { arbitrum, avalanche, base, bsc, gnosis, linea, mainnet, optimism, polygon, scroll } from 'viem/chains'
 
+// before these blocks, we'll rely solely on the ContangoProxy's PositionUpserted event
 const moneyMarketEventsStartBlocks = {
   [arbitrum.id]: 285426286,
   [optimism.id]: 129385005,
@@ -31,8 +32,6 @@ export const wrappedNativeMap: Record<number, string> = {
   [gnosis.id]: '0xe91d153e0b41518a2ce8dd3d7944fa863463a97d',
   [bsc.id]: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
 }
-
-export const contangoProxy_address = '0x6cae28b3d09d8f8fc74ccd496ac986fc84c0c24e'
 
 export const ADDRESSES = {
   contangoProxy: '0x6cae28b3d09d8f8fc74ccd496ac986fc84c0c24e',

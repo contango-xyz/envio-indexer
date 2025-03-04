@@ -98,7 +98,7 @@ const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsse
       return
     }
     const { position } = snapshot
-    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number - 1, position })
+    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
 
     const aaveLiquidationEvent = await processAaveLiquidationEvents({
       chainId: event.chainId,

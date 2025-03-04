@@ -27,7 +27,7 @@ SpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
 
   context.ContangoSwapEvent.set(swapEvent)
   eventStore.addLog({ event, contangoEvent: { ...swapEvent, eventType: EventType.SWAP_EXECUTED } })
-}, { wildcard: true })
+})
 
 SimpleSpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
 
@@ -52,4 +52,4 @@ SimpleSpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
 
   context.ContangoSwapEvent.set(swapEvent)
   eventStore.addLog({ event, contangoEvent: { ...swapEvent, eventType: EventType.SWAP_EXECUTED } })
-}, { wildcard: true })
+})

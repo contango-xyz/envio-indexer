@@ -258,16 +258,6 @@ type ContangoPositionMigratedEvent {
   newContangoPositionId: String!
 }
 
-type Liquidations_LiquidateComet1 {
-  id: ID!
-  chainId: Int!
-  absorber: String!
-  borrower: String!
-  asset: String!
-  collateralAbsorbed: BigInt!
-  usdValue: BigInt!
-}
-
 type ContangoLiquidationEvent {
   id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.LIQUIDATION}`
   blockNumber: Int!

@@ -45,7 +45,9 @@ ERC20.Transfer.handler(async ({ event }) => {
       }
     }
     const isWrappedNative = event.srcAddress.toLowerCase() === wrappedNativeMap[event.chainId]
-    if (isWrappedNative && (isMint || isBurn) && depositWithdrawalAddresses.includes(from) || depositWithdrawalAddresses.includes(to)) {
+    const isMintToVaultOrContango = isMint && (to === ADDRESSES.vaultProxy || to === ADDRESSES.maestroProxy || to === ADDRESSES.contangoProxy)
+    const isBurnFromVaultOrContango = isBurn && (from === ADDRESSES.vaultProxy || from === ADDRESSES.maestroProxy || from === ADDRESSES.contangoProxy)
+    if (isWrappedNative && (isMintToVaultOrContango || isBurnFromVaultOrContango)) {
       eventStore.addLog({ event, contangoEvent: createContangoEvent(erc20Event) })
     }  
   }

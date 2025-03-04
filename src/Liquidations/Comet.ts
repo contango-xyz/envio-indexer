@@ -1,42 +1,15 @@
 import {
   CometLiquidations,
-  CometLiquidations_LiquidateComet2_event,
-  ContangoLiquidationEvent,
-  handlerContext,
-  Liquidations_LiquidateComet1
+  ContangoLiquidationEvent
 } from "generated";
 import { eventsReducer } from "../accounting/processEvents";
 import { eventStore } from "../Store";
-import { getInterestToSettleOnLiquidation } from "../utils/common";
+import { getBalancesAtBlock, getInterestToSettleOnLiquidation } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { EventType } from "../utils/types";
 import { getPositionIdForProxyAddress } from "./common";
 
-CometLiquidations.LiquidateComet1.handler(async ({ event, context }) => {
-  const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.borrower, context })
-  if (positionId) {
-    const entity: Liquidations_LiquidateComet1 = {
-      id: `${event.chainId}_${event.transaction.hash}_comet1`,
-      chainId: event.chainId,
-      absorber: event.params.absorber,
-      borrower: event.params.borrower,
-      asset: event.params.asset,
-      collateralAbsorbed: event.params.collateralAbsorbed,
-      usdValue: event.params.usdValue,
-      };
-    context.Liquidations_LiquidateComet1.set(entity);
-  }
-}, { wildcard: true });
-
-const getStep1Event = async (event: CometLiquidations_LiquidateComet2_event, context: handlerContext) => {
-  const step1Event = await context.Liquidations_LiquidateComet1.get(`${event.chainId}_${event.transaction.hash}_comet1`)
-  if (!step1Event) {
-    throw new Error(`Step 1 event not found for transaction ${event.transaction.hash} on chain ${event.chainId}`)
-  }
-  return step1Event
-}
-
-CometLiquidations.LiquidateComet2.handler(async ({ event, context }) => {
+CometLiquidations.AbsorbCollateral.handler(async ({ event, context }) => {
   const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.borrower, context })
   
   if (positionId) {
@@ -46,15 +19,17 @@ CometLiquidations.LiquidateComet2.handler(async ({ event, context }) => {
       return
     }
     const { position } = snapshot
-    const step1Event = await getStep1Event(event, context)
-    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number - 1, position })
+    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
+    const { debt: debtAfter, collateral: collateralAfter } = await getBalancesAtBlock(event.chainId, position.contangoPositionId, event.block.number)
+    const debtDelta = debtAfter - position.debt
+    const collateralDelta = collateralAfter - position.collateral
 
     const liquidationEvent: ContangoLiquidationEvent = {
       id: createEventId({ ...event, eventType: EventType.LIQUIDATION }),
       chainId: event.chainId,
       contangoPositionId: positionId,
-      collateralDelta: -step1Event.collateralAbsorbed,
-      debtDelta: -event.params.basePaidOut,
+      collateralDelta,
+      debtDelta,
       blockNumber: event.block.number,
       blockTimestamp: event.block.timestamp,
       transactionHash: event.transaction.hash,
@@ -63,7 +38,6 @@ CometLiquidations.LiquidateComet2.handler(async ({ event, context }) => {
     }
     
     context.ContangoLiquidationEvent.set(liquidationEvent)
-    context.Liquidations_LiquidateComet1.deleteUnsafe(`${event.chainId}_${event.transaction.hash}_comet1`)
     eventStore.addLog({ event: { ...event, params: { positionId } }, contangoEvent: { ...liquidationEvent, eventType: EventType.LIQUIDATION } })
 
     await eventsReducer({ ...snapshot, context })

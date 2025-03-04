@@ -5,14 +5,17 @@ import {
   UnderlyingPositionFactory,
   UnderlyingPositionFactory_UnderlyingPositionCreated
 } from "generated";
-import { Hex, toHex, zeroAddress } from "viem";
+import { getContract, Hex, toHex, zeroAddress } from "viem";
 import { createPosition } from "./accounting/positions";
 import { eventStore } from "./Store";
 import { createInstrumentId, getPosition, getPositionSafe } from "./utils/common";
 import { getOrCreateToken } from "./utils/getTokenDetails";
-import { createEventId, createFillItemId } from "./utils/ids";
+import { createEventId } from "./utils/ids";
 import { strategyContractsAddresses } from "./utils/previousContractAddresses";
 import { EventType, PositionUpsertedEvent } from "./utils/types";
+import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
+import { contangoAbi } from "./abis";
+import { clients } from "./clients";
 
 // re-run indexing again
 ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
@@ -111,4 +114,13 @@ ContangoProxy.ClosingOnlySet.handler(async ({ event, context }) => {
   if (!instrument) throw new Error('Instrument not found')
 
   context.Instrument.set({ ...instrument, closingOnly: event.params.closingOnly })
+})
+
+ContangoProxy.Upgraded.contractRegister(async ({ event, context }) => {
+  if (event.block.number >= getIMoneyMarketEventsStartBlock(event.chainId)) {
+    const contract = getContract({ address: event.srcAddress as `0x${string}`, abi: contangoAbi, client: clients[event.chainId] })
+    const spotExecutor = await contract.read.spotExecutor({ blockNumber: BigInt(event.block.number)})
+    console.log('ContangoProxy spotExecutor updated', spotExecutor, event.chainId, event.block.number)
+    context.addSpotExecutor(spotExecutor)
+  }
 })

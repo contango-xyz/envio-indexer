@@ -5,7 +5,7 @@ import { clients } from "../clients";
 import { Cache, CacheCategory } from "./cache";
 import { decodeTokenId, getOrCreateToken } from "./getTokenDetails";
 import { createIdForPosition } from "./ids";
-import { mulDiv } from "./math-helpers";
+import { max, mulDiv } from "./math-helpers";
 import { ReturnPromiseType } from "./types";
 import { positionIdMapper } from "./mappers";
 import { arbitrum, avalanche, base, bsc, gnosis, mainnet, optimism, polygon, scroll } from "viem/chains";
@@ -50,12 +50,8 @@ export const getBalancesAtBlock = async (chainId: number, positionId: string, bl
 export const getInterestToSettleOnLiquidation = async ({ chainId, blockNumber, position }: { position: Position; chainId: number; blockNumber: number }) => {
   const { collateral: collateralBefore, debt: debtBefore } = await getBalancesAtBlock(chainId, position.contangoPositionId, blockNumber - 1)
 
-  const lendingProfitToSettle = collateralBefore > 0n ? collateralBefore - position.collateral : 0n
-  const debtCostToSettle = debtBefore > 0n ? debtBefore - position.debt : 0n
-
-  if (lendingProfitToSettle < 0n || debtCostToSettle < 0n) {
-    throw new Error('Interest to settle cannot be negative')
-  }
+  const lendingProfitToSettle = max(collateralBefore - position.collateral, 0n)
+  const debtCostToSettle = max(debtBefore - position.debt, 0n)
 
   return { lendingProfitToSettle, debtCostToSettle }
 }

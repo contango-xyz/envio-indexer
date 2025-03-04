@@ -27,8 +27,9 @@ export const deriveFillItemValuesFromPositionUpsertedEvent = (
 
   const newFillItem = { ...fillItem }
 
+  // in case we have a price populated from a swap event, we'll use that
   newFillItem.referencePrice_long = price || newFillItem.referencePrice_long
-  newFillItem.referencePrice_short = mulDiv(collateralToken.unit, debtToken.unit, price) || newFillItem.referencePrice_short
+  newFillItem.referencePrice_short = mulDiv(collateralToken.unit, debtToken.unit, newFillItem.referencePrice_long)
   newFillItem.collateralDelta += quantityDelta
   
   let accruedLendingProfit = 0n
@@ -40,12 +41,12 @@ export const deriveFillItemValuesFromPositionUpsertedEvent = (
 
   // figure out debt delta
   let debtDelta = 0n
-  let accruedInterest = 0n
+  let debtCostToSettle = 0n
 
-  if (price > 0n) {
+  if (newFillItem.referencePrice_long > 0n) {
     if (Number(cashflowCcy) === CashflowCurrency.Base) {
       const amountBorrowed = quantityDelta - cashflow
-      debtDelta = mulDiv(amountBorrowed, price, collateralToken.unit)
+      debtDelta = mulDiv(amountBorrowed, newFillItem.referencePrice_long, collateralToken.unit)
     } else {
       const amountOut = mulDiv(quantityDelta, price, collateralToken.unit)
       debtDelta = amountOut - cashflow
@@ -54,22 +55,13 @@ export const deriveFillItemValuesFromPositionUpsertedEvent = (
 
   if (position.debt + debtDelta < 0n) {
     // we know this must be a closing fill event
-    accruedInterest = -position.debt - debtDelta
-  }
-
-  // probably processing a strategy transaction
-  if (quantityDelta === 0n) {
-    // edge case where we're not processing a strategy transaction
-    if (Number(cashflowCcy) === CashflowCurrency.Base) {
-      debtDelta -= mulDiv(cashflow, price, collateralToken.unit)
-    }
-    debtDelta = -cashflow
+    debtCostToSettle = -position.debt - debtDelta
   }
 
   newFillItem.debtDelta += debtDelta
-  newFillItem.lendingProfitToSettle = accruedLendingProfit
-  newFillItem.debtCostToSettle = accruedInterest
-  if (newFillItem.referencePrice_long !== 0n && newFillItem.referencePrice_short !== 0n) {
+  newFillItem.lendingProfitToSettle += accruedLendingProfit
+  newFillItem.debtCostToSettle += debtCostToSettle
+  if (price) {
     newFillItem.referencePriceSource = ReferencePriceSource.SwapPrice
   }
 

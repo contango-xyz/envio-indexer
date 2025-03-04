@@ -14,12 +14,14 @@ contracts:
 - name: ContangoProxy
   handler: src/ContangoProxy.ts
   events:
+  - event: Upgraded(address indexed implementation)
   - event: ClosingOnlySet(bytes16 indexed symbol, bool closingOnly)
   - event: InstrumentCreated(bytes16 indexed symbol, address base, address quote)
   - event: PositionUpserted(bytes32 indexed positionId, address indexed owner, address indexed tradedBy, uint8 cashflowCcy, int256 cashflow, int256 quantityDelta, uint256 price, uint256 fee, uint8 feeCcy)
 - name: Maestro
   handler: src/Maestro.ts
   events:
+  - event: Upgraded(address indexed implementation)
   - event: FeeCollected(bytes32 indexed positionId, address indexed trader, address treasury, address token, uint256 amount, uint8 basisPoints)
 - name: PositionNFT
   handler: src/ContangoProxy.ts
@@ -47,8 +49,8 @@ contracts:
 - name: StrategyProxy
   handler: src/StrategyProxy.ts
   events:
+  - event: Upgraded(address indexed implementation)
   - event: StragegyExecuted(address indexed user, bytes32 indexed action, bytes32 position1, bytes32 position2, bytes data)
-  - event: BeginStrategy(bytes32 indexed positionId, address indexed owner);
   - event: EndStrategy(bytes32 indexed positionId, address indexed owner);
 - name: AaveLiquidations
   handler: src/Liquidations/Aave.ts
@@ -88,9 +90,6 @@ contracts:
   handler: src/Liquidations/Comet.ts
   events:
   - event: AbsorbCollateral(address indexed absorber, address indexed borrower, address indexed asset, uint256 collateralAbsorbed, uint256 usdValue)
-    name: LiquidateComet1
-  - event: AbsorbDebt(address indexed absorber, address indexed borrower, uint256 basePaidOut, uint256 usdValue)
-    name: LiquidateComet2
 - name: DolomiteLiquidations
   handler: src/Liquidations/Dolomite.ts
   events:
@@ -98,7 +97,7 @@ contracts:
     name: LiquidateDolomite
 networks:
 - id: 42161 # Arbitrum
-  start_block: 137136153
+  start_block: 137136152
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -111,7 +110,13 @@ networks:
   - name: Maestro
     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
   - name: SimpleSpotExecutor
+    address:
+      - 0xCdFE200930A1E54a6f99c6CcA24fcf10300D2785
+      - 0x755123dCEeB93d49D9Dc6D7602EfCC842d796B9D
   - name: SpotExecutor
+    address:
+      - 0x332b65c67C371d72477a3f5F8da836a3cA998CFc
+      - 0x7e4EC0C90E5e8ACe890c2080bd8377ef70991462
   - name: IMoneyMarket
   - name: ERC20
   - name: WrappedNative
@@ -138,7 +143,14 @@ networks:
 #   - name: Maestro
 #     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
 #   - name: SimpleSpotExecutor
+#     address:
+#       - 0x370755b2846D7bA8fa237765F68c1783d76879E3
+#       - 0xC5CCF95eCF7afAdA7cf2EFb079C4298Db448e0dc
+#       - 0xf7A710A5b0542d817b58F3b986d38895291977e5
 #   - name: SpotExecutor
+#     address:
+#       - 0x96bF9aB0E421a3da31D4506c967A825312455767
+#       - 0xB519Ab4E9842fB099DE9432968a71Fbb207f23c3
 #   - name: IMoneyMarket
 #   - name: ERC20
 #   - name: WrappedNative
@@ -165,7 +177,13 @@ networks:
 #   - name: Maestro
 #     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
 #   - name: SimpleSpotExecutor
+#     address:
+#       - 0x39a4C4aCD154e14D7d84562a93e2214A3aCAF687
+#       - 0xE8d430364F831E9E2c8E1ADb1E8789F229c76feB
 #   - name: SpotExecutor
+#     address:
+#       - 0x370755b2846D7bA8fa237765F68c1783d76879E3
+#       - 0x76b849DCe083003fc0c671078a7184dB335dFe76
 #   - name: IMoneyMarket
 #   - name: ERC20
 #   - name: WrappedNative
@@ -192,7 +210,15 @@ networks:
 #   - name: Maestro
 #     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
 #   - name: SimpleSpotExecutor
+#     address:
+#       - 0xdFEA386f471d15d8B2DDB931F5e57713974c7899
+#       - 0x12158F171c77F6341443B0700E2d094cdeabAA9d
+#       - 0xdFEA386f471d15d8B2DDB931F5e57713974c7899
 #   - name: SpotExecutor
+#     address:
+#       - 0x90896236b00A88959E427e5D47b73Fd51bd82F1b
+#       - 0x9bbd78BF99fF21D75a0d1d94582Cb7DD70f07339
+#       - 0x999EB1BBFAbbf5A6b3Cf4Ea6369b3ABbD51D8FCD
 #   - name: IMoneyMarket
 #   - name: ERC20
 #   - name: WrappedNative
@@ -219,7 +245,13 @@ networks:
 #   - name: Maestro
 #     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
 #   - name: SimpleSpotExecutor
+#     address:
+#       - 0xD915a274Dfc25535fe64bEAa9F1Ce032eb341945
+#       - 0xaa6525bd15Be31b75D89E47a95f4dee1A715EBd3
 #   - name: SpotExecutor
+#     address:
+#       - 0x96bF9aB0E421a3da31D4506c967A825312455767
+#       - 0x96E9198c47c645632FC0B60319A718fB71Db71B4
 #   - name: IMoneyMarket
 #   - name: ERC20
 #   - name: WrappedNative
@@ -246,7 +278,13 @@ networks:
 #   - name: Maestro
 #     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
 #   - name: SimpleSpotExecutor
+#     address:
+#       - 0x95Bb968af09ac6975Adae3c96d3721A47E17D6C8
+#       - 0x30BfEA27Ea2b5D39a3C716E8298D418dcEdaeA9B
 #   - name: SpotExecutor
+#     address:
+#       - 0x14334B85Ca27a11e32d80c898c9a9892bcb62fe6
+#       - 0x3f1A8961f3f37a89514c2f0082DfF7F59773D7dA
 #   - name: IMoneyMarket
 #   - name: ERC20
 #   - name: WrappedNative
@@ -264,16 +302,22 @@ networks:
 #   contracts:
 #   - name: ContangoProxy
 #     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-#   - name: PositionNFT
-#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+#   # - name: PositionNFT
+#   #   address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
 #   - name: StrategyProxy
 #     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-#   - name: UnderlyingPositionFactory
-#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+#   # - name: UnderlyingPositionFactory
+#   #   address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
 #   - name: Maestro
 #     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
 #   - name: SimpleSpotExecutor
+#     address:
+#       - 0xE061bF5a674fCeC95499432865dc818A5DF638B8
+#       - 0x94C8C29C9C7EE1b0d38557B1EeC44f608a4DEDe6
 #   - name: SpotExecutor
+#     address:
+#       - 0x14334B85Ca27a11e32d80c898c9a9892bcb62fe6
+#       - 0x3D31eddd017d4C9F3aD291b51Fb18A44CE456494
 #   - name: IMoneyMarket
 #   - name: ERC20
 #   - name: WrappedNative
@@ -300,7 +344,14 @@ networks:
 #   - name: Maestro
 #     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
 #   - name: SimpleSpotExecutor
+#     address:
+#       - 0xB32C63420F8c9C5F6091B5e1160bcd4A41433643
+#       - 0x38b527D1f4d8d3aCfb7e4893D3733e09B4D76a79
+#       - 0x94C8C29C9C7EE1b0d38557B1EeC44f608a4DEDe6
 #   - name: SpotExecutor
+#     address:
+#       - 0x3D31eddd017d4C9F3aD291b51Fb18A44CE456494
+#       - 0x95Bb968af09ac6975Adae3c96d3721A47E17D6C8
 #   - name: IMoneyMarket
 #   - name: ERC20
 #   - name: WrappedNative
@@ -327,7 +378,14 @@ networks:
 #   - name: Maestro
 #     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
 #   - name: SimpleSpotExecutor
+#     address:
+#       - 0x370755b2846D7bA8fa237765F68c1783d76879E3
+#       - 0x984665CCF39467eee3e0e73fa7f3911fBEcade38
+#       - 0x0792E5df6f8e0Bcb13cE590030E1C6A1319d80f6
 #   - name: SpotExecutor
+#     address:
+#       - 0x96bF9aB0E421a3da31D4506c967A825312455767
+#       - 0xCB8E5A64ca64dFA3bcc04a00d1eEB3f1043C78CB
 #   - name: IMoneyMarket
 #   - name: ERC20
 #   - name: WrappedNative
@@ -354,7 +412,13 @@ networks:
 #   - name: Maestro
 #     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
 #   - name: SimpleSpotExecutor
+#     address:
+#       - 0xC24E2B3ef8c762b87BBb161931F67fA4982Fb92D
+#       - 0xA9A04F40101F62397A24B3cEebbdC9660898e172
 #   - name: SpotExecutor
+#     address:
+#       - 0xA1B131d69acc4E292090A1B6F8A5A28BCB610fA7
+#       - 0x53A35a547549875Cd8ddC498c3f2bd866c392900
 #   - name: IMoneyMarket
 #   - name: ERC20
 #   - name: WrappedNative

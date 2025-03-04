@@ -1,10 +1,13 @@
 import { ContangoFeeCollectedEvent, ContangoPositionMigratedEvent, StrategyProxy } from "generated";
-import { Hex, decodeAbiParameters, parseAbiParameters, toHex } from "viem";
+import { Hex, decodeAbiParameters, getContract, parseAbiParameters, toHex } from "viem";
 import { eventStore } from "./Store";
 import { eventsReducer } from "./accounting/processEvents";
 import { getOrCreateToken } from "./utils/getTokenDetails";
 import { createEventId } from "./utils/ids";
 import { EventType } from "./utils/types";
+import { strategyBuilderAbi } from "./abis";
+import { clients } from "./clients";
+import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
 
 export const decodeFeeEvent = (data: Hex) => {
   const [treasury, token, addressReceivingFees, amount, basisPoints] = decodeAbiParameters(
@@ -64,5 +67,14 @@ StrategyProxy.StragegyExecuted.handler(async ({ event, context }) => {
     context.ContangoPositionMigratedEvent.set(entity)
     eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.MIGRATED } })
 
+  }
+})
+
+StrategyProxy.Upgraded.contractRegister(async ({ event, context }) => {
+  if (event.block.number >= getIMoneyMarketEventsStartBlock(event.chainId)) {
+    const contract = getContract({ address: event.srcAddress as `0x${string}`, abi: strategyBuilderAbi, client: clients[event.chainId] })
+    const simpleSpotExecutor = await contract.read.spotExecutor({ blockNumber: BigInt(event.block.number)})
+    console.log('StrategyProxy simpleSpotExecutor updated', simpleSpotExecutor, event.chainId, event.block.number)
+    context.addSimpleSpotExecutor(simpleSpotExecutor)
   }
 })

@@ -6,13 +6,16 @@ import {
   Token
 } from "generated";
 import { Mutable } from "viem";
+import { getLiquidationPenalty } from "../Liquidations/common";
 import { eventStore, PositionSnapshot } from "../Store";
-import { createFillItemId, createIdForLot, createIdForPosition } from "../utils/ids";
-import { ContangoEvents, EventType, FillItemType, MigratedEvent, SwapEvent } from "../utils/types";
-import { calculateCashflowsAndFee, calculateDust, calculateFillPrice, eventsToPartialFillItem, ReferencePriceSource, withFallbackReferencePrice } from "./helpers";
-import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCloseSize, initialiseLot, saveLots, savePosition } from "./lotsAccounting";
 import { createInstrumentId } from "../utils/common";
+import { createFillItemId, createIdForLot, createIdForPosition } from "../utils/ids";
 import { mulDiv } from "../utils/math-helpers";
+import { ContangoEvents, EventType, FillItemType, MigratedEvent, SwapEvent } from "../utils/types";
+import { calculateCashflowsAndFee, calculateDust, calculateFillPrice, calculateNetCashflows, eventsToPartialFillItem, ReferencePriceSource } from "./helpers";
+import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCloseSize, initialiseLot, savePosition } from "./lotsAccounting";
+import { ADDRESSES } from "../utils/constants";
+import { TRADER_CONSTANT } from "../ERC20";
 
 export const processEvents = async (
   {
@@ -34,12 +37,18 @@ export const processEvents = async (
   const { block: { number: blockNumber }, transaction: { hash: transactionHash } } = genericEvent
 
   // create the basic (partial) fillItem
-  const partialFillItem = await withFallbackReferencePrice({ lots: lotsSnapshot, position: positionSnapshot, partialFillItem: eventsToPartialFillItem(positionSnapshot, debtToken, collateralToken, events), blockNumber, debtToken, collateralToken })
+  const partialFillItem = await eventsToPartialFillItem({ lots: lotsSnapshot, position: positionSnapshot, debtToken, collateralToken, events })
+
+  if (partialFillItem.fillItemType === FillItemType.Liquidated && partialFillItem.referencePrice_long !== 0n) {
+    partialFillItem.liquidationPenalty = getLiquidationPenalty({ collateralToken, collateralDelta: partialFillItem.collateralDelta, debtDelta: partialFillItem.debtDelta, referencePrice: partialFillItem.referencePrice_long })
+  }
+
+  const cashflows = calculateNetCashflows(events, [positionSnapshot.owner, TRADER_CONSTANT])
 
   // dust left in the vault
   const dustRecord = calculateDust(events, partialFillItem)
 
-  const { cashflowQuote, cashflowBase, fee_long, fee_short } = calculateCashflowsAndFee({ partialFillItem, debtToken, collateralToken, dustRecord })
+  const { cashflowQuote, cashflowBase, fee_long, fee_short, cashflowToken_id, cashflow } = calculateCashflowsAndFee({ cashflows, partialFillItem, debtToken, collateralToken, dustRecord })
 
   const fillCost_short = partialFillItem.collateralDelta - cashflowBase
   const fillCost_long = -(partialFillItem.debtDelta + cashflowQuote)
@@ -68,8 +77,8 @@ export const processEvents = async (
     collateralDelta: partialFillItem.collateralDelta,
     debtCostToSettle: partialFillItem.debtCostToSettle,
     debtDelta: partialFillItem.debtDelta,
-    cashflow: partialFillItem.cashflow,
-    cashflowToken_id: partialFillItem.cashflowToken_id,
+    cashflow,
+    cashflowToken_id,
     fillItemType: partialFillItem.fillItemType,
     lendingProfitToSettle: partialFillItem.lendingProfitToSettle,
     liquidationPenalty: partialFillItem.liquidationPenalty,
@@ -132,7 +141,7 @@ export const processEvents = async (
     cashflowBase: positionSnapshot.cashflowBase + fillItem.cashflowBase,
     fees_long: positionSnapshot.fees_long + fillItem.fee_long,
     fees_short: positionSnapshot.fees_short + fillItem.fee_short,
-    realisedPnl_long: fillItem.realisedPnl_long - positionSnapshot.realisedPnl_long,
+    realisedPnl_long: fillItem.realisedPnl_long + positionSnapshot.realisedPnl_long,
     realisedPnl_short: fillItem.realisedPnl_short + positionSnapshot.realisedPnl_short,
     collateral: positionSnapshot.collateral + fillItem.collateralDelta,
     debt: positionSnapshot.debt + fillItem.debtDelta,
@@ -142,8 +151,10 @@ export const processEvents = async (
     shortCost: positionSnapshot.shortCost + fillItem.fillCost_short,
   }
 
-  if (positionSnapshot.collateral === 0n) fillItem.fillItemType = FillItemType.Opened
-  else if (newPosition.collateral <= 0n) fillItem.fillItemType = partialFillItem.fillItemType === FillItemType.Liquidated ? FillItemType.ClosedByLiquidation : FillItemType.Closed
+  if (fillItem.fillItemType === FillItemType.Liquidated) {
+    if (newPosition.collateral <= 0n) fillItem.fillItemType = FillItemType.ClosedByLiquidation
+  } else if (positionSnapshot.collateral === 0n) fillItem.fillItemType = FillItemType.Opened
+  else if (newPosition.collateral <= 0n) fillItem.fillItemType = FillItemType.Closed
   else fillItem.fillItemType = FillItemType.Modified
 
   // return the new position, fillItem, and lots
@@ -200,11 +211,15 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
       const fillCost_long = position.longCost * -1n
       const fillCost_short = position.shortCost * -1n
 
-      const partialFillItemClose = await withFallbackReferencePrice({ lots, position, partialFillItem: eventsToPartialFillItem(position, debtToken, collateralToken, getEventsForPositionId(oldContangoPositionId)), blockNumber, debtToken, collateralToken })
-      const { cashflowQuote, cashflowBase, fee_long, fee_short } = calculateCashflowsAndFee({ partialFillItem: partialFillItemClose, debtToken, collateralToken })
+      const dustRecord = calculateNetCashflows(events, [ADDRESSES.vaultProxy])
+
+      const partialFillItemClose = await eventsToPartialFillItem({ lots, position, debtToken, collateralToken, events: getEventsForPositionId(oldContangoPositionId) })
+      const { fee_long, fee_short } = calculateCashflowsAndFee({ partialFillItem: partialFillItemClose, debtToken, collateralToken, cashflows: {}, dustRecord })
       
       const fillItemClose: Mutable<FillItem> = {
         ...partialFillItemClose,
+        cashflow: 0n,
+        cashflowToken_id: debtToken.id,
         id: createFillItemId({ ...event, positionId: oldContangoPositionId }),
         timestamp,
         chainId,
@@ -215,8 +230,8 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         fee_short,
         realisedPnl_long: 0n,
         realisedPnl_short: 0n,
-        cashflowQuote,
-        cashflowBase,
+        cashflowQuote: 0n,
+        cashflowBase: 0n,
         cashflowSwap_id: undefined,
         feeToken_id: undefined,
         position_id: position.id,
@@ -231,8 +246,10 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
       saveFillItem(fillItemClose, context)
 
       const openingFillItem: FillItem = {
-        ...eventsToPartialFillItem(position, debtToken, collateralToken, getEventsForPositionId(newContangoPositionId)),
+        ...(await eventsToPartialFillItem({ lots, position, debtToken, collateralToken, events: getEventsForPositionId(newContangoPositionId) })),
         id: createFillItemId({ ...event, positionId: newContangoPositionId }),
+        cashflowToken_id: debtToken.id,
+        cashflow: 0n,
         timestamp,
         chainId,
         blockNumber,
@@ -269,7 +286,6 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         const cashflowBase = mulDiv(position.cashflowBase + fillItemClose.cashflowBase, swapEvent.amountOut, swapEvent.amountIn)
         const realisedPnl_short = mulDiv(position.realisedPnl_short, swapEvent.amountOut, swapEvent.amountIn)
         const fees_short = mulDiv(position.fees_short, swapEvent.amountOut, swapEvent.amountIn)
-        const accruedLendingProfit = mulDiv(position.accruedLendingProfit + fillItemClose.lendingProfitToSettle, swapEvent.amountOut, swapEvent.amountIn)
 
         const newPosition = {
           ...position,
@@ -281,12 +297,12 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
           createdAtTransactionHash: event.transaction.hash,
           id: idOfNewPosition,
           contangoPositionId: newContangoPositionId,
-          accruedLendingProfit,
-          accruedDebtCost: position.accruedDebtCost + fillItemClose.debtCostToSettle,
+          accruedLendingProfit: 0n,
+          accruedDebtCost: 0n,
           fees_long: position.fees_long + fee_long,
           fees_short,
           cashflowBase,
-          cashflowQuote: position.cashflowQuote + cashflowQuote,
+          cashflowQuote: position.cashflowQuote,
           realisedPnl_short,
         }
 
@@ -322,8 +338,8 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
           accruedDebtCost: position.accruedDebtCost + fillItemClose.debtCostToSettle,
           fees_long: position.fees_long + fee_long,
           fees_short: position.fees_short + fee_short,
-          cashflowBase: position.cashflowBase + cashflowBase,
-          cashflowQuote: position.cashflowQuote + cashflowQuote,    
+          cashflowBase: position.cashflowBase,
+          cashflowQuote: position.cashflowQuote,    
         }
 
         const newLots = lots.map((lot, index) => ({

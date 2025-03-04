@@ -9,8 +9,10 @@ import { ContangoEvents, FillItemType, ReturnPromiseType, SwapEvent } from '../s
 import { getTransactionEvents, getTransactionHashes, processTransaction, processTransactions } from './testHelpers'
 import { decodeFeeEvent } from '../src/StrategyProxy'
 import { Hex, toHex } from 'viem'
-import { createInstrumentId } from '../src/utils/common'
+import { createInstrumentId, getBalancesAtBlock } from '../src/utils/common'
 import { mulDiv } from '../src/utils/math-helpers'
+import { clients } from '../src/clients'
+import { arbitrum, mainnet } from 'viem/chains'
 const { MockDb } = TestHelpers
 
 const getFeeEventMaybe = (events: ReturnPromiseType<typeof getTransactionEvents>) => {
@@ -33,17 +35,23 @@ describe('indexer tests', () => {
     mockDb = MockDb.createMockDb()
   })
 
-  async function highLevelInvariants(id: IdForPosition) {
-    const position = mockDb.entities.Position.get(id)
-    if (!position) throw new Error('Position not found in test!')
-    const fillItems = mockDb.entities.FillItem.getAll()
-    const lots = mockDb.entities.Lot.getAll()
+  async function getTokensForPosition(position: Position) {
     const instrument = mockDb.entities.Instrument.get(position.instrument_id)
     if (!instrument) throw new Error('Instrument not found in test!')
     const debtToken = mockDb.entities.Token.get(instrument.debtToken_id)
     if (!debtToken) throw new Error('Debt token not found in test!')
     const collateralToken = mockDb.entities.Token.get(instrument.collateralToken_id)
     if (!collateralToken) throw new Error('Collateral token not found in test!')
+
+    return { debtToken, collateralToken }
+  }
+
+  async function highLevelInvariants(id: IdForPosition) {
+    const position = mockDb.entities.Position.get(id)
+    if (!position) throw new Error('Position not found in test!')
+    const fillItems = mockDb.entities.FillItem.getAll()
+    const lots = mockDb.entities.Lot.getAll()
+    const { debtToken, collateralToken } = await getTokensForPosition(position)
 
     const aggregatedQuoteCashflow = fillItems.reduce((acc, fillItem) => acc + fillItem.cashflowQuote, 0n)
     const aggregatedBaseCashflow = fillItems.reduce((acc, fillItem) => acc + fillItem.cashflowBase, 0n)
@@ -52,6 +60,12 @@ describe('indexer tests', () => {
     expect(position.cashflowBase).to.equal(aggregatedBaseCashflow)
     expect(lots.length).to.equal(0)
 
+    for (const fillItem of fillItems) {
+      const longTimesShort = mulDiv(fillItem.referencePrice_long, fillItem.referencePrice_short, debtToken.unit)
+      const asNumber = Number(longTimesShort) / Number(collateralToken.unit)
+      expect(asNumber).to.approximately(1, 0.001)
+    }
+
     expect((Number(position.realisedPnl_long) / Number(debtToken.unit)).toFixed(3)).to.equal((Number(position.cashflowQuote) / Number(debtToken.unit) * -1).toFixed(3))
     expect((Number(position.realisedPnl_short) / Number(collateralToken.unit)).toFixed(3)).to.equal((Number(position.cashflowBase) / Number(collateralToken.unit) * -1).toFixed(3))
 
@@ -59,6 +73,42 @@ describe('indexer tests', () => {
     // any closed position should have realised pnl
     expect(position.realisedPnl_long).to.not.equal(0n)
     expect(position.realisedPnl_short).to.not.equal(0n)
+  }
+
+  async function highLevelInvariantsForLiquidation(id: IdForPosition) {
+    const position = mockDb.entities.Position.get(id)
+    if (!position) throw new Error('Position not found in test!')
+    const fillItems = mockDb.entities.FillItem.getAll()
+    const { debtToken, collateralToken } = await getTokensForPosition(position)
+
+    const aggregatedQuoteCashflow = fillItems.reduce((acc, fillItem) => acc + fillItem.cashflowQuote, 0n)
+    const aggregatedBaseCashflow = fillItems.reduce((acc, fillItem) => acc + fillItem.cashflowBase, 0n)
+
+    expect(position.cashflowQuote).to.equal(aggregatedQuoteCashflow)
+    expect(position.cashflowBase).to.equal(aggregatedBaseCashflow)
+
+    let liquidationPenaltyBase = 0n
+    let liquidationPenaltyQuote = 0n
+
+    for (const fillItem of fillItems) {
+      // long/short prices should be inverse of each other
+      const longTimesShort = mulDiv(fillItem.referencePrice_long, fillItem.referencePrice_short, debtToken.unit)
+      const asNumber = Number(longTimesShort) / Number(collateralToken.unit)
+      expect(asNumber).to.approximately(1, 0.001)
+
+      if (fillItem.fillItemType === FillItemType.ClosedByLiquidation || fillItem.fillItemType === FillItemType.Liquidated) {
+        liquidationPenaltyBase += mulDiv(fillItem.realisedPnl_short, fillItem.liquidationPenalty, BigInt(1e4))
+        liquidationPenaltyQuote += mulDiv(fillItem.realisedPnl_long, fillItem.liquidationPenalty, BigInt(1e4))
+      }
+    }
+
+    const fillItemTypes = fillItems.map(fillItem => fillItem.fillItemType)
+
+    // expect(liquidationPenaltyBase).to.not.equal(0n)
+    // expect(liquidationPenaltyQuote).to.not.equal(0n)
+    
+    expect((Number(position.realisedPnl_long) / Number(debtToken.unit)).toFixed(3)).to.equal((Number(position.cashflowQuote) / Number(debtToken.unit) * -1).toFixed(3))
+    expect((Number(position.realisedPnl_short) / Number(collateralToken.unit)).toFixed(3)).to.equal((Number(position.cashflowBase) / Number(collateralToken.unit) * -1).toFixed(3))
   }
 
   it('RDNT/ETH short - Chain: Arbitrum - Number: #20498', async function() {
@@ -385,7 +435,7 @@ describe('indexer tests', () => {
           expect(newPosition.collateral).to.equal(swapEvent.params.amountOut)
           expect(newPosition.debt).to.equal(migrationOpenFillItem.debtDelta)
 
-          // check that the new position has the same collateral and debt as the old position PLUS the interest accrued has been settled
+          // we're migrating the base ccy
           expect(newPosition.accruedLendingProfit).to.equal(0n)
           expect(newPosition.accruedDebtCost).to.equal(0n)
 
@@ -534,10 +584,10 @@ describe('indexer tests', () => {
       } else if (i === 1) {
         // this position has debt, and hence a short lot
         expect(position.realisedPnl_long).to.not.equal(0n)
-        expect(position.realisedPnl_short).to.equal(0n)
-        expect(fillItem.realisedPnl_short).to.equal(0n)
+        expect(position.realisedPnl_short).to.equal(155n)
+        expect(fillItem.realisedPnl_short).to.equal(155n)
         expect(fillItem.fillCost_short).to.equal(155n) // precision error
-        expect(fillItem.fillPrice_short).to.equal(0n)
+        expect(fillItem.fillPrice_short).to.equal(191549n)
         expect(fillItem.fillItemType).to.equal(FillItemType.Closed)
       }
     }
@@ -589,10 +639,10 @@ describe('indexer tests', () => {
         expect(fillItem.referencePrice_long).to.equal(BigInt(0.843980e6))
         expect(fillItem.fillPrice_long).to.equal(BigInt(0.843980e6))
 
-        expect(fillItem.referencePrice_short).to.equal(1184861656014328796n) // 1 / 0.842603 = 1.18486 (the inverse of the long trade price)
+        expect(fillItem.referencePrice_short).to.equal(1184862200526078817n) // 1 / 0.842603 = 1.18486 (the inverse of the long trade price)
         expect(fillItem.fillPrice_short).to.equal(1184861653848222336n) // 1 / 0.842603 = 1.18486 (the inverse of the long trade price)
 
-        expect(fillItem.realisedPnl_long).to.equal(222282n) // sum of quote cashflows
+        expect(fillItem.realisedPnl_long).to.equal(222214n) // sum of quote cashflows
         expect(fillItem.realisedPnl_short).to.equal(80867067518738762881n - 80735499391093514082n) // sum of base cashflows
       }
     }
@@ -600,5 +650,68 @@ describe('indexer tests', () => {
     await highLevelInvariants(id)
   })
 
+  describe('Liquidations', () => {
+    const testCases = [
+      {
+        chainId: arbitrum.id,
+        positionId: '0x574554485553444300000000000000000effffffff000000000100000000171c',
+        liquidationTxHashes: ['0xd2e9f1be384feca885a778fdabd252a5008a2f4a34af87dc52b305435cabf67e'],
+        description: 'Comet liquidation'
+      },
+      {
+        chainId: arbitrum.id,
+        positionId: '0x5745544855534443000000000000000001ffffffff0000000000000000005541',
+        liquidationTxHashes: ['0x7257788de7d17094d7f65cba97558daf1f2f4e7dae2bd1a401c901c55a1b5717'],
+        description: 'Aave v3 liquidation'
+      },
+      // {
+      //   chainId: mainnet.id,
+      //   positionId: '0x7245544844414900000000000000000007ffffffff000000000000000000000f',
+      //   liquidationTxHashes: ['0xe0413af6eae2e644f7ce3fd671e8d159d1c23c3beb6d7f9cb5ec0e00aa596a83'],
+      //   description: 'Spark liquidation'
+      // }
+      // Add more test cases here as needed
+    ];
 
+    testCases.forEach(({ chainId, positionId, liquidationTxHashes, description }) => {
+      it(`${description}`, async function() {
+        this.timeout(30000);
+        const id = createIdForPosition({ chainId, positionId });
+        let transactionHashes = await getTransactionHashes(id);
+        transactionHashes.push(...liquidationTxHashes.map(txHash => txHash as Hex)); // liquidation tx hash
+
+        transactionHashes = (await Promise.all(transactionHashes.map(async (txHash) => {
+          const blockNumber = await clients[chainId].getTransaction({ hash: txHash }).then(tx => tx.blockNumber)
+          return { txHash, blockNumber }
+        }))).sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber)).map(x => x.txHash)
+        
+        for (let i = 0; i < transactionHashes.length; i++) {
+          mockDb = await processTransaction(id, transactionHashes[i], mockDb);
+
+          const fillItems = mockDb.entities.FillItem.getAll()
+          const position = mockDb.entities.Position.get(id)
+          if (!position) throw new Error('Position not found in test!')
+          const fillItem = fillItems[i]
+
+          // const balancesBefore = await getBalancesAtBlock(chainId, positionId, fillItem.blockNumber - 1)
+          // const balancesAfter = await getBalancesAtBlock(chainId, positionId, fillItem.blockNumber)
+
+          // console.log({
+          //   fillItem: Number(fillItem.debtDelta) / 1e6,
+          //   actual: Number(balancesAfter.debt - balancesBefore.debt) / 1e6,
+          //   position: Number(position.debt) / 1e6,
+          //   accruedDebtCost: Number(position.accruedDebtCost) / 1e6,
+          //   accruedLendingProfit: Number(position.accruedLendingProfit) / 1e6,
+          //   typeof: typeof position.debt,
+          //   cashflowQuote: Number(fillItem.cashflowQuote) / 1e6,
+          //   positionCashflowQuote: Number(position.cashflowQuote) / 1e6,
+          // })
+
+          // console.log('fillItem', fillItem)
+        }
+
+        await highLevelInvariantsForLiquidation(id);
+      });
+    });
+  });
 })
