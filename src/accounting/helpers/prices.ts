@@ -59,12 +59,12 @@ const processSwapEventsFromPositionUpsertedEvent = (debtToken: Token, collateral
 
 export const getReferencePrices = async (position: Position, debtToken: Token, collateralToken: Token, events: ContangoEvents[]): Promise<ReferencePrices> => {
   // first assume we can get the reference prices from the swap events
-  const swapEvents = events.filter(event => event.eventType === EventType.SWAP_EXECUTED)
+  const swapEvents = events.filter((event): event is SwapEvent => event.eventType === EventType.SWAP_EXECUTED)
   const result1 = processSwapEvents(debtToken, collateralToken, swapEvents)
   if (result1.referencePriceSource === ReferencePriceSource.SwapPrice) return result1
 
   // if we can't get the reference prices from the swap events, we'll get them from the position upserted events
-  const positionUpsertedEvents = events.filter(event => event.eventType === EventType.POSITION_UPSERTED)
+  const positionUpsertedEvents = events.filter((event): event is PositionUpsertedEvent => event.eventType === EventType.POSITION_UPSERTED)
   const result2 = processSwapEventsFromPositionUpsertedEvent(debtToken, collateralToken, positionUpsertedEvents)
   if (result2.referencePriceSource === ReferencePriceSource.SwapPrice) return { ...result2, cashflowSwap: result1.cashflowSwap } // we may have gotten the cashflow swap event form the swap events
 
