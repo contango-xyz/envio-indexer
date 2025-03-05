@@ -587,8 +587,7 @@ describe('indexer tests', () => {
         // this position has debt, and hence a short lot
         expect(position.realisedPnl_long).to.not.equal(0n)
         expect(position.realisedPnl_short).to.equal(0n)
-        expect(fillItem.realisedPnl_short).to.equal(0n)
-        expect(fillItem.fillCost_short).to.equal(155n) // precision error
+        expect(fillItem.fillCost_short).to.equal(1257072n) // just the fee
         expect(fillItem.fillPrice_short).to.equal(0n)
         expect(fillItem.fillItemType).to.equal(FillItemType.Closed)
       }
@@ -866,6 +865,7 @@ describe('indexer tests', () => {
     const highLevelInvariantTestCases = [
       createIdForPosition({ chainId: 1, positionId: '0x4141564555534443000000000000000001ffffffff0000000000000000000304' }),
       createIdForPosition({ chainId: 42161, positionId: '0x5745544855534443000000000000000001ffffffff00000000000000000057f8' }),
+      createIdForPosition({ chainId: 10, positionId: '0x5745544855534443000000000000000001ffffffff0000000000000000000012' }),
     ]
 
     highLevelInvariantTestCases.forEach((id) => {
@@ -874,12 +874,6 @@ describe('indexer tests', () => {
         const transactionHashes = await getTransactionHashes(id)    
         for (let i = 0; i < transactionHashes.length; i++) {
           mockDb = await processTransaction(id, transactionHashes[i], mockDb)
-          // const fillItems = mockDb.entities.FillItem.getAll()
-          // const position = mockDb.entities.Position.get(id)
-          // if (!position) throw new Error('Position not found in test!')
-          // const fillItem = fillItems[i]
-          // console.log('fillItem', fillItem)
-          // console.log('position', position)
         }
         await highLevelInvariants(id, 'failing')
       })

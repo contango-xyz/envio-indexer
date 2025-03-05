@@ -1,17 +1,17 @@
 import { Position, Token } from "generated";
+import { zeroAddress } from "viem";
 import { ADDRESSES, wrappedNativeMap } from "../../utils/constants";
 import { createTokenId } from "../../utils/getTokenDetails";
 import { absolute, mulDiv } from "../../utils/math-helpers";
 import { FeeCollectedEvent, TransferEvent } from "../../utils/types";
-import { DebtAndCollateralResult } from "./debtAndCollateral";
-import { zeroAddress } from "viem";
+import { FillItemWithPricesFeesDebtAndCollateral } from "./debtAndCollateral";
 
-export const withCashflowsAndFee = ({ position, partialFillItem, debtToken, collateralToken, transferEvents, feeEvent }: { feeEvent?: FeeCollectedEvent; position: Position; partialFillItem: DebtAndCollateralResult; debtToken: Token; collateralToken: Token; transferEvents: TransferEvent[]; }) => {
+export const withCashflowsAndFee = ({ position, fillItem, debtToken, collateralToken, transferEvents, feeEvent }: { feeEvent?: FeeCollectedEvent; position: Position; fillItem: FillItemWithPricesFeesDebtAndCollateral; debtToken: Token; collateralToken: Token; transferEvents: TransferEvent[]; }) => {
   const cashflows = calculateNetCashflows(transferEvents, position)
 
   return {
-    ...partialFillItem,
-    ...calculateCashflowsAndFee({ position, partialFillItem, debtToken, collateralToken, cashflows, feeEvent })
+    ...fillItem,
+    ...calculateCashflowsAndFee({ position, fillItem, debtToken, collateralToken, cashflows, feeEvent })
   }
 }
 
@@ -39,37 +39,21 @@ export const calculateNetCashflows = (events: TransferEvent[], position: Positio
 
 }
 
-const getBaseToQuoteFn = ({ partialFillItem, collateralToken }: { partialFillItem: DebtAndCollateralResult; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, partialFillItem.referencePrice_long, collateralToken.unit)
-const getQuoteToBaseFn = ({ partialFillItem, collateralToken }: { partialFillItem: DebtAndCollateralResult; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, collateralToken.unit, partialFillItem.referencePrice_long)
+const getBaseToQuoteFn = ({ fillItem, collateralToken }: { fillItem: FillItemWithPricesFeesDebtAndCollateral; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, fillItem.referencePrice_long, collateralToken.unit)
+const getQuoteToBaseFn = ({ fillItem, collateralToken }: { fillItem: FillItemWithPricesFeesDebtAndCollateral; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, collateralToken.unit, fillItem.referencePrice_long)
 
-export const calculateCashflowsAndFee = ({ position, partialFillItem, debtToken, collateralToken, cashflows, feeEvent }: { feeEvent?: FeeCollectedEvent; position: Position; partialFillItem: DebtAndCollateralResult; debtToken: Token; collateralToken: Token; cashflows: CashflowRecord; }) => {
-  const baseToQuote = getBaseToQuoteFn({ partialFillItem, collateralToken })
-  const quoteToBase = getQuoteToBaseFn({ partialFillItem, collateralToken })
+export const calculateCashflowsAndFee = ({ position, fillItem, debtToken, collateralToken, cashflows, feeEvent }: { feeEvent?: FeeCollectedEvent; position: Position; fillItem: FillItemWithPricesFeesDebtAndCollateral; debtToken: Token; collateralToken: Token; cashflows: CashflowRecord; }) => {
+  const baseToQuote = getBaseToQuoteFn({ fillItem, collateralToken })
+  const quoteToBase = getQuoteToBaseFn({ fillItem, collateralToken })
 
-  let fee_long = 0n
-  let fee_short = 0n
-  let fee = 0n
-  let feeToken_id = debtToken.id
-
-  if (feeEvent) {
-    feeToken_id = feeEvent.token_id
-    fee = feeEvent.amount
-    if (feeEvent.token_id === collateralToken.id) {
-      fee_short += feeEvent.amount
-      fee_long += baseToQuote(feeEvent.amount)
-    } else if (feeEvent.token_id === debtToken.id) {
-      fee_long += feeEvent.amount
-      fee_short += quoteToBase(feeEvent.amount)
-    }
-  }
 
   let highestCashflowQuote = 0n
   let cashflowToken_id = debtToken.id
   let cashflow = 0n
 
   // because these two values are purely used for accounting, and we want to show realised pnl not accounting for our trading fees, we subtract the fees from the cashflows
-  let cashflowQuote = -fee_long
-  let cashflowBase = -fee_short
+  let cashflowQuote = -fillItem.fee_long
+  let cashflowBase = -fillItem.fee_short
 
   Object.entries(cashflows).forEach(([tokenAddress, record]) => {
     Object.entries(record)
@@ -99,8 +83,8 @@ export const calculateCashflowsAndFee = ({ position, partialFillItem, debtToken,
       })
     })
   
-  if (partialFillItem.cashflowSwap) {
-    const { cashflowSwap } = partialFillItem
+  if (fillItem.cashflowSwap) {
+    const { cashflowSwap } = fillItem
     if (cashflowSwap.tokenOut_id === debtToken.id) {
       cashflowToken_id = cashflowSwap.tokenIn_id
       cashflow = cashflowSwap.amountIn
@@ -124,5 +108,5 @@ export const calculateCashflowsAndFee = ({ position, partialFillItem, debtToken,
     }
   }
 
-  return { cashflow, cashflowQuote, cashflowBase, fee, fee_long, fee_short, cashflowToken_id, feeToken_id }
+  return { cashflow, cashflowQuote, cashflowBase, cashflowToken_id }
 }

@@ -3,6 +3,7 @@ import { absolute, mulDiv } from "../utils/math-helpers";
 import { CollateralEvent, ContangoEvents, DebtEvent, EventType, FeeCollectedEvent, LiquidationEvent, PositionUpsertedEvent, SwapEvent, TransferEvent } from "../utils/types";
 import { withCashflowsAndFee } from "./helpers/cashflows";
 import { calculateDebtAndCollateral } from "./helpers/debtAndCollateral";
+import { withFees } from "./helpers/fees";
 import { getReferencePrices } from "./helpers/prices";
 
 export enum ReferencePriceSource {
@@ -28,9 +29,10 @@ const organizeEvents = (events: ContangoEvents[]) => {
 export const eventsToPartialFillItem = async ({ position, debtToken, collateralToken, events, lots }: { lots: Lot[]; position: Position; debtToken: Token; collateralToken: Token; events: ContangoEvents[]; }) => {
   const { transferEvents, feeEvents, positionUpsertedEvents, swapEvents, debtEvents, collateralEvents, liquidationEvents } = organizeEvents(events)
 
-  const withPrices = await getReferencePrices(position, debtToken, collateralToken, events)
-  const withDebtAndCollateral = calculateDebtAndCollateral({ position, debtEvents, collateralEvents, positionUpsertedEvents, prices: withPrices, collateralToken, liquidationEvents })
-  const partialFillItem = withCashflowsAndFee({ position, partialFillItem: withDebtAndCollateral, debtToken, collateralToken, transferEvents, feeEvent: feeEvents[0] })
+  const fillItemWithPrices = await getReferencePrices(position, debtToken, collateralToken, events)
+  const fillItemWithFees = withFees({ fillItem: fillItemWithPrices, feeEvents, positionUpsertedEvents, collateralToken, debtToken })
+  const withDebtAndCollateral = calculateDebtAndCollateral({ position, debtEvents, collateralEvents, positionUpsertedEvents, fillItem: fillItemWithFees, collateralToken, liquidationEvents })
+  const partialFillItem = withCashflowsAndFee({ position, fillItem: withDebtAndCollateral, debtToken, collateralToken, transferEvents, feeEvent: feeEvents[0] })
 
   const fillCost_short = partialFillItem.collateralDelta - partialFillItem.cashflowBase
   const fillCost_long = -(partialFillItem.debtDelta + partialFillItem.cashflowQuote)

@@ -1,19 +1,19 @@
 import { ContangoSwapEvent, Position, Token } from "generated";
+import { getMarkPrice } from "../../utils/common";
+import { decodeTokenId } from "../../utils/getTokenDetails";
+import { mulDiv } from "../../utils/math-helpers";
 import { ContangoEvents, EventType, PositionUpsertedEvent, SwapEvent } from "../../utils/types";
 import { ReferencePriceSource } from "../helpers";
-import { mulDiv } from "../../utils/math-helpers";
-import { decodeTokenId } from "../../utils/getTokenDetails";
-import { getMarkPrice } from "../../utils/common";
 
-export type ReferencePrices = {
+export type FillItemWithPrices = {
   referencePrice_long: bigint;
   referencePrice_short: bigint;
   referencePriceSource: ReferencePriceSource
   cashflowSwap?: ContangoSwapEvent
 }
 
-const processSwapEvents = (debtToken: Token, collateralToken: Token, events: SwapEvent[]): ReferencePrices => {
-  const referencePrices: ReferencePrices = {
+const processSwapEvents = (debtToken: Token, collateralToken: Token, events: SwapEvent[]): FillItemWithPrices => {
+  const referencePrices: FillItemWithPrices = {
     referencePrice_long: 0n,
     referencePrice_short: 0n,
     referencePriceSource: ReferencePriceSource.None,
@@ -38,7 +38,7 @@ const processSwapEvents = (debtToken: Token, collateralToken: Token, events: Swa
   return referencePrices
 }
 
-const processSwapEventsFromPositionUpsertedEvent = (debtToken: Token, collateralToken: Token, events: PositionUpsertedEvent[]): Omit<ReferencePrices, 'cashflowSwap'> => {
+const processSwapEventsFromPositionUpsertedEvent = (debtToken: Token, collateralToken: Token, events: PositionUpsertedEvent[]): Omit<FillItemWithPrices, 'cashflowSwap'> => {
   const referencePrices = {
     referencePrice_long: 0n,
     referencePrice_short: 0n,
@@ -57,7 +57,7 @@ const processSwapEventsFromPositionUpsertedEvent = (debtToken: Token, collateral
   return referencePrices
 }
 
-export const getReferencePrices = async (position: Position, debtToken: Token, collateralToken: Token, events: ContangoEvents[]): Promise<ReferencePrices> => {
+export const getReferencePrices = async (position: Position, debtToken: Token, collateralToken: Token, events: ContangoEvents[]): Promise<FillItemWithPrices> => {
   // first assume we can get the reference prices from the swap events
   const swapEvents = events.filter((event): event is SwapEvent => event.eventType === EventType.SWAP_EXECUTED)
   const result1 = processSwapEvents(debtToken, collateralToken, swapEvents)
