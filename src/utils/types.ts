@@ -53,9 +53,9 @@ export type ContangoEvents =
 export enum FillItemType {
   Opened = 'Opened',
   Closed = 'Closed',
-  ClosedByLiquidation = 'Liquidated (Closed)',
+  LiquidatedFull = 'Liquidated (Closed)',
+  LiquidatedPartial = 'Liquidated (Partial)',
   Modified = 'Modified',
-  Liquidated = "Liquidated",
   MigrationClose = "Closed (M)",
   MigrationOpen = "Opened (M)",
 }

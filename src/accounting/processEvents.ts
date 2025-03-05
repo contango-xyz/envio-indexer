@@ -1,21 +1,12 @@
-import {
-  FillItem,
-  handlerContext,
-  Lot,
-  Position,
-  Token
-} from "generated";
+import { FillItem, handlerContext, Lot, Position, Token } from "generated";
 import { Mutable } from "viem";
-import { getLiquidationPenalty } from "../Liquidations/common";
 import { eventStore, PositionSnapshot } from "../Store";
 import { createInstrumentId } from "../utils/common";
 import { createFillItemId, createIdForLot, createIdForPosition } from "../utils/ids";
 import { mulDiv } from "../utils/math-helpers";
 import { ContangoEvents, EventType, FillItemType, MigratedEvent, SwapEvent } from "../utils/types";
-import { calculateCashflowsAndFee, calculateDust, calculateFillPrice, calculateNetCashflows, eventsToPartialFillItem, ReferencePriceSource } from "./helpers";
+import { calculateFillPrice, eventsToPartialFillItem, ReferencePriceSource } from "./helpers";
 import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, GenericEvent, handleCloseSize, initialiseLot, savePosition } from "./lotsAccounting";
-import { ADDRESSES } from "../utils/constants";
-import { TRADER_CONSTANT } from "../ERC20";
 
 export const processEvents = async (
   {
@@ -34,128 +25,90 @@ export const processEvents = async (
     collateralToken: Token
   }
 ) => {
-  const { block: { number: blockNumber }, transaction: { hash: transactionHash } } = genericEvent
+  const { block: { number: blockNumber, timestamp }, chainId, transaction: { hash: transactionHash } } = genericEvent
 
   // create the basic (partial) fillItem
-  const partialFillItem = await eventsToPartialFillItem({ lots: lotsSnapshot, position: positionSnapshot, debtToken, collateralToken, events })
+  const { cashflowSwap, ...partialFillItem } = await eventsToPartialFillItem({ lots: lotsSnapshot, position: positionSnapshot, debtToken, collateralToken, events })
+  const { lendingProfitToSettle, debtCostToSettle, debtDelta, collateralDelta, fillCost_short, fillCost_long } = partialFillItem
 
-  if (partialFillItem.fillItemType === FillItemType.Liquidated && partialFillItem.referencePrice_long !== 0n) {
-    partialFillItem.liquidationPenalty = getLiquidationPenalty({ collateralToken, collateralDelta: partialFillItem.collateralDelta, debtDelta: partialFillItem.debtDelta, referencePrice: partialFillItem.referencePrice_long })
-  }
-
-  const cashflows = calculateNetCashflows(events, [positionSnapshot.owner, TRADER_CONSTANT])
-
-  // dust left in the vault
-  const dustRecord = calculateDust(events, partialFillItem)
-
-  const { cashflowQuote, cashflowBase, fee_long, fee_short, cashflowToken_id, cashflow } = calculateCashflowsAndFee({ cashflows, partialFillItem, debtToken, collateralToken, dustRecord })
-
-  const fillCost_short = partialFillItem.collateralDelta - cashflowBase
-  const fillCost_long = -(partialFillItem.debtDelta + cashflowQuote)
-
-  const fillPrice_long = calculateFillPrice({ fillCost: fillCost_long, unit: collateralToken.unit, delta: partialFillItem.collateralDelta })
-  const fillPrice_short = calculateFillPrice({ fillCost: fillCost_short, unit: debtToken.unit, delta: partialFillItem.debtDelta })
-
-  const fillItem: Mutable<FillItem> = {
-    id: createFillItemId({ ...genericEvent, positionId: positionSnapshot.contangoPositionId }),
-    timestamp: genericEvent.block.timestamp,
-    chainId: genericEvent.chainId,
-    blockNumber,
-    transactionHash,
-    contangoPositionId: positionSnapshot.contangoPositionId,
-    fee_long,
-    fee_short,
-    realisedPnl_long: 0n,
-    realisedPnl_short: 0n,
-    cashflowQuote,
-    cashflowBase,
-    cashflowSwap_id: partialFillItem.cashflowSwap?.id,
-    fee: partialFillItem.fee,
-    feeToken_id: partialFillItem.feeToken_id,
-    position_id: positionSnapshot.id,
-    dust: partialFillItem.residualCashflow?.value ?? 0n,
-    collateralDelta: partialFillItem.collateralDelta,
-    debtCostToSettle: partialFillItem.debtCostToSettle,
-    debtDelta: partialFillItem.debtDelta,
-    cashflow,
-    cashflowToken_id,
-    fillItemType: partialFillItem.fillItemType,
-    lendingProfitToSettle: partialFillItem.lendingProfitToSettle,
-    liquidationPenalty: partialFillItem.liquidationPenalty,
-    referencePrice_long: partialFillItem.referencePrice_long,
-    referencePrice_short: partialFillItem.referencePrice_short,
-    referencePriceSource: partialFillItem.referencePriceSource,
-    fillCost_long,
-    fillCost_short,
-    fillPrice_long,
-    fillPrice_short,
-  } as const satisfies FillItem
+  const fillItemId = createFillItemId({ ...genericEvent, positionId: positionSnapshot.contangoPositionId })
 
   let longLots: Mutable<Lot>[] = [...lotsSnapshot.filter(lot => lot.accountingType === AccountingType.Long)] // create a copy
   let shortLots: Mutable<Lot>[] = [...lotsSnapshot.filter(lot => lot.accountingType === AccountingType.Short)] // create a copy
 
-  longLots = await allocateFundingProfitToLots({ lots: longLots, fundingProfitToSettle: fillItem.lendingProfitToSettle }) // size grows, which is a good thing
-  longLots = await allocateFundingCostToLots({ lots: longLots, fundingCostToSettle: fillItem.debtCostToSettle }) // cost grows
-  
-  shortLots = await allocateFundingProfitToLots({ lots: shortLots, fundingProfitToSettle: -fillItem.debtCostToSettle }) // size grows, but it's actually a negative thing because your size is your debt!
-  shortLots = await allocateFundingCostToLots({ lots: shortLots, fundingCostToSettle: -fillItem.lendingProfitToSettle }) // cost grows, but it's actually a good thing because your cost is your collateral!
+  longLots = await allocateFundingProfitToLots({ lots: longLots, fundingProfitToSettle: lendingProfitToSettle }) // size grows, which is a good thing
+  longLots = await allocateFundingCostToLots({ lots: longLots, fundingCostToSettle: debtCostToSettle }) // cost grows
 
-  if (fillItem.debtDelta > 0n) {
+  shortLots = await allocateFundingProfitToLots({ lots: shortLots, fundingProfitToSettle: -debtCostToSettle }) // size grows, but it's actually a negative thing because your size is your debt!
+  shortLots = await allocateFundingCostToLots({ lots: shortLots, fundingCostToSettle: -lendingProfitToSettle }) // cost grows, but it's actually a good thing because your cost is your collateral!
+
+  let realisedPnl_long = 0n
+  let realisedPnl_short = 0n
+
+  if (debtDelta > 0n) {
     // create new short lot if adding debt
     shortLots.push(
       initialiseLot({
         event: genericEvent,
         position: positionSnapshot,
         accountingType: AccountingType.Short,
-        size: -fillItem.debtDelta,
+        size: -debtDelta,
         cost: fillCost_short
       })
     )
-  } else if (fillItem.debtDelta < 0n) {
+  } else if (debtDelta < 0n) {
     const closedCostRef = { value: 0n }
-    shortLots = handleCloseSize({ closedCostRef, lots: shortLots, position: positionSnapshot, fillItem, sizeDelta: fillItem.debtDelta, accountingType: AccountingType.Short, ...genericEvent })
-    fillItem.realisedPnl_short = fillCost_short - closedCostRef.value
+    shortLots = handleCloseSize({ partialFillItem, closedCostRef, lots: shortLots, position: positionSnapshot, sizeDelta: -debtDelta, ...genericEvent })
+    realisedPnl_short = fillCost_short - closedCostRef.value
   }
 
-  if (fillItem.collateralDelta > 0n) {
+  if (collateralDelta > 0n) {
     // create new long lot if adding collateral
     longLots.push(
       initialiseLot({
         event: genericEvent,
         position: positionSnapshot,
         accountingType: AccountingType.Long,
-        size: fillItem.collateralDelta,
+        size: collateralDelta,
         cost: fillCost_long
       })
     )
-  } else if (fillItem.collateralDelta < 0n) {
+  } else if (collateralDelta < 0n) {
     const closedCostRef = { value: 0n }
-    longLots = handleCloseSize({ closedCostRef, lots: longLots, position: positionSnapshot, fillItem, sizeDelta: fillItem.collateralDelta, accountingType: AccountingType.Long, ...genericEvent })
-    fillItem.realisedPnl_long = fillCost_long - closedCostRef.value
+    longLots = handleCloseSize({ closedCostRef, lots: longLots, position: positionSnapshot, partialFillItem, sizeDelta: collateralDelta, ...genericEvent })
+    realisedPnl_long = fillCost_long - closedCostRef.value
+  }
+
+  const fillItem: FillItem = {
+    id: fillItemId,
+    timestamp,
+    chainId,
+    blockNumber,
+    transactionHash,
+    contangoPositionId: positionSnapshot.contangoPositionId,
+    position_id: positionSnapshot.id,
+    realisedPnl_long,
+    realisedPnl_short,
+    cashflowSwap_id: cashflowSwap?.id,
+    ...partialFillItem,
   }
 
   // update the position
   const newPosition: Position = {
     ...positionSnapshot,
-    cashflowQuote: positionSnapshot.cashflowQuote + fillItem.cashflowQuote,
-    cashflowBase: positionSnapshot.cashflowBase + fillItem.cashflowBase,
-    fees_long: positionSnapshot.fees_long + fillItem.fee_long,
-    fees_short: positionSnapshot.fees_short + fillItem.fee_short,
-    realisedPnl_long: fillItem.realisedPnl_long + positionSnapshot.realisedPnl_long,
-    realisedPnl_short: fillItem.realisedPnl_short + positionSnapshot.realisedPnl_short,
-    collateral: positionSnapshot.collateral + fillItem.collateralDelta,
-    debt: positionSnapshot.debt + fillItem.debtDelta,
-    accruedLendingProfit: positionSnapshot.accruedLendingProfit + fillItem.lendingProfitToSettle,
-    accruedDebtCost: positionSnapshot.accruedDebtCost + fillItem.debtCostToSettle,
-    longCost: positionSnapshot.longCost + fillItem.fillCost_long,
-    shortCost: positionSnapshot.shortCost + fillItem.fillCost_short,
+    cashflowQuote: positionSnapshot.cashflowQuote + partialFillItem.cashflowQuote,
+    cashflowBase: positionSnapshot.cashflowBase + partialFillItem.cashflowBase,
+    fees_long: positionSnapshot.fees_long + partialFillItem.fee_long,
+    fees_short: positionSnapshot.fees_short + partialFillItem.fee_short,
+    realisedPnl_long: realisedPnl_long + positionSnapshot.realisedPnl_long,
+    realisedPnl_short: realisedPnl_short + positionSnapshot.realisedPnl_short,
+    collateral: positionSnapshot.collateral + collateralDelta,
+    debt: positionSnapshot.debt + debtDelta,
+    accruedLendingProfit: positionSnapshot.accruedLendingProfit + lendingProfitToSettle,
+    accruedDebtCost: positionSnapshot.accruedDebtCost + debtCostToSettle,
+    longCost: longLots.reduce((acc, curr) => acc + curr.openCost, 0n),
+    shortCost: shortLots.reduce((acc, curr) => acc + curr.openCost, 0n),
   }
-
-  if (fillItem.fillItemType === FillItemType.Liquidated) {
-    if (newPosition.collateral <= 0n) fillItem.fillItemType = FillItemType.ClosedByLiquidation
-  } else if (positionSnapshot.collateral === 0n) fillItem.fillItemType = FillItemType.Opened
-  else if (newPosition.collateral <= 0n) fillItem.fillItemType = FillItemType.Closed
-  else fillItem.fillItemType = FillItemType.Modified
 
   // return the new position, fillItem, and lots
   return { position: newPosition, fillItem, lots: { longLots, shortLots } }
@@ -163,7 +116,8 @@ export const processEvents = async (
 
 const saveFillItem = async (fillItem: FillItem, context: handlerContext) => {
   if (fillItem.referencePriceSource === ReferencePriceSource.None && fillItem.cashflow !== 0n) {
-    throw new Error('Fill item has no reference price source')
+    console.log('fillItem in error', fillItem)
+    throw new Error(`Fill item has no reference price source: ${fillItem.transactionHash} chainId: ${fillItem.chainId}`)
   }
   context.FillItem.set(fillItem)
 }
@@ -211,10 +165,7 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
       const fillCost_long = position.longCost * -1n
       const fillCost_short = position.shortCost * -1n
 
-      const dustRecord = calculateNetCashflows(events, [ADDRESSES.vaultProxy])
-
       const partialFillItemClose = await eventsToPartialFillItem({ lots, position, debtToken, collateralToken, events: getEventsForPositionId(oldContangoPositionId) })
-      const { fee_long, fee_short } = calculateCashflowsAndFee({ partialFillItem: partialFillItemClose, debtToken, collateralToken, cashflows: {}, dustRecord })
       
       const fillItemClose: Mutable<FillItem> = {
         ...partialFillItemClose,
@@ -226,8 +177,8 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         blockNumber,
         transactionHash,
         contangoPositionId: oldContangoPositionId,
-        fee_long,
-        fee_short,
+        fee_long: partialFillItemClose.fee_long,
+        fee_short: partialFillItemClose.fee_short,
         realisedPnl_long: 0n,
         realisedPnl_short: 0n,
         cashflowQuote: 0n,
@@ -235,7 +186,6 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         cashflowSwap_id: undefined,
         feeToken_id: undefined,
         position_id: position.id,
-        dust: 0n,
         fillItemType: FillItemType.MigrationClose,
         fillCost_long,
         fillCost_short,
@@ -268,7 +218,6 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
         fee: 0n,
         feeToken_id: undefined,
         position_id: position.id,
-        dust: 0n,
         fillItemType: FillItemType.MigrationOpen,
         fillCost_long: position.longCost,
         fillCost_short: position.shortCost,
@@ -285,7 +234,7 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
       if (swapEvent) {
         const cashflowBase = mulDiv(position.cashflowBase + fillItemClose.cashflowBase, swapEvent.amountOut, swapEvent.amountIn)
         const realisedPnl_short = mulDiv(position.realisedPnl_short, swapEvent.amountOut, swapEvent.amountIn)
-        const fees_short = mulDiv(position.fees_short, swapEvent.amountOut, swapEvent.amountIn)
+        const fees_short = mulDiv(position.fees_short + partialFillItemClose.fee_short, swapEvent.amountOut, swapEvent.amountIn)
 
         const newPosition = {
           ...position,
@@ -299,7 +248,7 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
           contangoPositionId: newContangoPositionId,
           accruedLendingProfit: 0n,
           accruedDebtCost: 0n,
-          fees_long: position.fees_long + fee_long,
+          fees_long: position.fees_long + partialFillItemClose.fee_long,
           fees_short,
           cashflowBase,
           cashflowQuote: position.cashflowQuote,
@@ -336,8 +285,8 @@ export const eventsReducer = async ({ context, position, lots, collateralToken, 
           debt: position.debt + fillItemClose.debtCostToSettle,
           accruedLendingProfit: position.accruedLendingProfit + fillItemClose.lendingProfitToSettle,
           accruedDebtCost: position.accruedDebtCost + fillItemClose.debtCostToSettle,
-          fees_long: position.fees_long + fee_long,
-          fees_short: position.fees_short + fee_short,
+          fees_long: position.fees_long + partialFillItemClose.fee_long,
+          fees_short: position.fees_short + partialFillItemClose.fee_short,
           cashflowBase: position.cashflowBase,
           cashflowQuote: position.cashflowQuote,    
         }
