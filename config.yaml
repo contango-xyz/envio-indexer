@@ -197,7 +197,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 1 # Mainnet
-  start_block: 6373860
+  start_block: 18269650
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -232,7 +232,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 137 # Polygon
-  start_block: 6373860
+  start_block: 48665180
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -265,7 +265,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 59144 # Linea
-  start_block: 6373860
+  start_block: 8030000
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -298,16 +298,16 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 534352 # Scroll
-  start_block: 6373860
+  start_block: 8227404
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-  # - name: PositionNFT
-  #   address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+  - name: PositionNFT
+    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
   - name: StrategyProxy
     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-  # - name: UnderlyingPositionFactory
-  #   address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+  - name: UnderlyingPositionFactory
+    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
   - name: Maestro
     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
   - name: SimpleSpotExecutor
@@ -331,7 +331,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 43114 # Avalanche
-  start_block: 6373860
+  start_block: 49059779
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -365,7 +365,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 100 # Gnosis
-  start_block: 6373860
+  start_block: 30822346
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -399,7 +399,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 56 # Bsc
-  start_block: 6373860
+  start_block: 39410362
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E

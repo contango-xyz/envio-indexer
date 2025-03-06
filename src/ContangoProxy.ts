@@ -17,7 +17,7 @@ import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
 import { contangoAbi } from "./abis";
 import { clients } from "./clients";
 
-// re-run indexing
+// re-run indexing again again
 ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
   const contangoEvent: PositionUpsertedEvent = {
     ...event.params,
