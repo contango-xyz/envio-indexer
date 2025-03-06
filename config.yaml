@@ -96,22 +96,22 @@ contracts:
   - event: LogLiquidate(address indexed solidAccountOwner, uint256 solidAccountNumber, address indexed liquidAccountOwner, uint256 liquidAccountNumber, uint256 heldMarket, uint256 owedMarket, bool solidHeldUpdateSign, uint256 solidHeldUpdateValue, bool solidOwedUpdateSign, uint128 solidOwedUpdateValue, bool liquidHeldUpdateSign, uint256 liquidHeldUpdateValue, bool liquidOwedUpdateSign, uint128 liquidOwedUpdateValue)
     name: LiquidateDolomite
 networks:
-- id: 42161 # Arbitrum
-  start_block: 137136152
-  contracts:
-  - name: ContangoProxy
-    address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
-  - name: PositionNFT
-    address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
-  - name: StrategyProxy
-    address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
-  - name: UnderlyingPositionFactory
-    address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
-  - name: Maestro
-    address: 0xa6a147946FACAc9E0B99824870B36088764f969F
-  - name: SimpleSpotExecutor
-    address:
-      - 0xCdFE200930A1E54a6f99c6CcA24fcf10300D2785
+# - id: 42161 # Arbitrum
+#   start_block: 137136152
+#   contracts:
+#   - name: ContangoProxy
+#     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
+#   - name: PositionNFT
+#     address: 0xC2462f03920D47fC5B9e2C5F0ba5D2ded058fD78
+#   - name: StrategyProxy
+#     address: 0x5BDeB2152f185BF59f2dE027CBBC05355cc965Bd
+#   - name: UnderlyingPositionFactory
+#     address: 0xDaBA83815404f5e1bc33f5885db7D96F51e127F5
+#   - name: Maestro
+#     address: 0xa6a147946FACAc9E0B99824870B36088764f969F
+#   - name: SimpleSpotExecutor
+#     address:
+#       - 0xCdFE200930A1E54a6f99c6CcA24fcf10300D2785
       - 0x755123dCEeB93d49D9Dc6D7602EfCC842d796B9D
   - name: SpotExecutor
     address:
@@ -197,7 +197,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 1 # Mainnet
-  start_block: 6373860
+  start_block: 18269652
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -232,7 +232,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 137 # Polygon
-  start_block: 6373860
+  start_block: 48665181
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -265,7 +265,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 59144 # Linea
-  start_block: 6373860
+  start_block: 8030000
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -298,7 +298,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 534352 # Scroll
-  start_block: 6373860
+  start_block: 8227405
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -331,7 +331,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 43114 # Avalanche
-  start_block: 6373860
+  start_block: 49059780
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -365,7 +365,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 100 # Gnosis
-  start_block: 6373860
+  start_block: 30822346
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
@@ -399,7 +399,7 @@ networks:
   - name: CometLiquidations
   - name: DolomiteLiquidations
 - id: 56 # Bsc
-  start_block: 6373860
+  start_block: 39410362
   contracts:
   - name: ContangoProxy
     address: 0x6Cae28b3D09D8f8Fc74ccD496AC986FC84C0C24E
