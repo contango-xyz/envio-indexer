@@ -1,68 +1,43 @@
-import { Position, Token } from "generated";
+import { Token } from "generated";
 import { zeroAddress } from "viem";
 import { ADDRESSES, wrappedNativeMap } from "../../utils/constants";
 import { createTokenId } from "../../utils/getTokenDetails";
 import { absolute, mulDiv } from "../../utils/math-helpers";
-import { FeeCollectedEvent, TransferEvent } from "../../utils/types";
-import { FillItemWithPricesFeesDebtAndCollateral } from "./debtAndCollateral";
+import { TransferEvent } from "../../utils/types";
+import { PriceConverters, ReferencePrices } from "./prices";
 
-export const withCashflowsAndFee = ({ position, fillItem, debtToken, collateralToken, transferEvents, feeEvent }: { feeEvent?: FeeCollectedEvent; position: Position; fillItem: FillItemWithPricesFeesDebtAndCollateral; debtToken: Token; collateralToken: Token; transferEvents: TransferEvent[]; }) => {
-  const cashflows = calculateNetCashflows(transferEvents, position)
-
-  return {
-    ...fillItem,
-    ...calculateCashflowsAndFee({ position, fillItem, debtToken, collateralToken, cashflows, feeEvent })
-  }
+type Params = {
+  owner: string
+  chainId: number
+  debtToken: Token
+  collateralToken: Token
+  transferEvents: TransferEvent[]
+  prices: ReferencePrices
+  fee_long: bigint
+  fee_short: bigint
+  converters: PriceConverters
 }
 
-type AddressHoldingFunds = string
-type TokenAddress = string
-type CashflowRecordInner = Record<TokenAddress, bigint>
-type CashflowRecord = Record<AddressHoldingFunds, CashflowRecordInner>
-
-export const calculateNetCashflows = (events: TransferEvent[], position: Position): CashflowRecord => {
-  return events
-    .reduce((acc, e) => {
-      let [from, to, srcAddress] = [e.from, e.to, e.srcAddress].map(x => x.toLowerCase())
-      const fromPrev = acc[srcAddress]?.[from] ?? 0n
-      const toPrev = acc[srcAddress]?.[to] ?? 0n
-
-      return {
-        ...acc,
-        [srcAddress]: {
-          ...(acc[srcAddress] ?? {}),
-          [from]: fromPrev + e.value,
-          [to]: toPrev - e.value,
-        }
-      }
-    }, {} as CashflowRecord)
-
-}
-
-const getBaseToQuoteFn = ({ fillItem, collateralToken }: { fillItem: FillItemWithPricesFeesDebtAndCollateral; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, fillItem.referencePrice_long, collateralToken.unit)
-const getQuoteToBaseFn = ({ fillItem, collateralToken }: { fillItem: FillItemWithPricesFeesDebtAndCollateral; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, collateralToken.unit, fillItem.referencePrice_long)
-
-export const calculateCashflowsAndFee = ({ position, fillItem, debtToken, collateralToken, cashflows, feeEvent }: { feeEvent?: FeeCollectedEvent; position: Position; fillItem: FillItemWithPricesFeesDebtAndCollateral; debtToken: Token; collateralToken: Token; cashflows: CashflowRecord; }) => {
-  const baseToQuote = getBaseToQuoteFn({ fillItem, collateralToken })
-  const quoteToBase = getQuoteToBaseFn({ fillItem, collateralToken })
-
+export const withCashflows = ({ owner, chainId, debtToken, collateralToken, transferEvents, prices, fee_long, fee_short, converters }: Params) => {
+  const cashflows = calculateNetCashflows(transferEvents)
+  const { baseToQuote, quoteToBase } = converters
 
   let highestCashflowQuote = 0n
-  let cashflowToken_id = debtToken.id
+  let cashflowToken_id = undefined
   let cashflow = 0n
 
   // because these two values are purely used for accounting, and we want to show realised pnl not accounting for our trading fees, we subtract the fees from the cashflows
-  let cashflowQuote = -fillItem.fee_long
-  let cashflowBase = -fillItem.fee_short
+  let cashflowQuote = -fee_long
+  let cashflowBase = -fee_short
 
   Object.entries(cashflows).forEach(([tokenAddress, record]) => {
     Object.entries(record)
       .filter(([addressMovingMoney]) => {
-        if ([ADDRESSES.vaultProxy, position.owner].includes(addressMovingMoney)) return true
-        if (addressMovingMoney === zeroAddress && wrappedNativeMap[position.chainId] === tokenAddress) return true
+        if ([ADDRESSES.vaultProxy, owner].includes(addressMovingMoney)) return true
+        if (addressMovingMoney === zeroAddress && wrappedNativeMap[chainId] === tokenAddress) return true
         return false
       })
-      .forEach(([_, value]) => {
+      .forEach(([addressMovingMoney, value]) => {
         if (value === 0n) return
         const cashflowQuoteBefore = cashflowQuote
         if (tokenAddress === collateralToken.address) {
@@ -83,8 +58,8 @@ export const calculateCashflowsAndFee = ({ position, fillItem, debtToken, collat
       })
     })
   
-  if (fillItem.cashflowSwap) {
-    const { cashflowSwap } = fillItem
+  if (prices.cashflowSwap) {
+    const { cashflowSwap } = prices
     if (cashflowSwap.tokenOut_id === debtToken.id) {
       cashflowToken_id = cashflowSwap.tokenIn_id
       cashflow = cashflowSwap.amountIn
@@ -109,4 +84,28 @@ export const calculateCashflowsAndFee = ({ position, fillItem, debtToken, collat
   }
 
   return { cashflow, cashflowQuote, cashflowBase, cashflowToken_id }
+}
+
+type AddressHoldingFunds = string
+type TokenAddress = string
+type CashflowRecordInner = Record<TokenAddress, bigint>
+type CashflowRecord = Record<AddressHoldingFunds, CashflowRecordInner>
+
+export const calculateNetCashflows = (events: TransferEvent[]): CashflowRecord => {
+  return events
+    .reduce((acc, e) => {
+      let [from, to, srcAddress] = [e.from, e.to, e.srcAddress].map(x => x.toLowerCase())
+      const fromPrev = acc[srcAddress]?.[from] ?? 0n
+      const toPrev = acc[srcAddress]?.[to] ?? 0n
+
+      return {
+        ...acc,
+        [srcAddress]: {
+          ...(acc[srcAddress] ?? {}),
+          [from]: fromPrev + e.value,
+          [to]: toPrev - e.value,
+        }
+      }
+    }, {} as CashflowRecord)
+
 }

@@ -1,6 +1,6 @@
 import { Hex } from "viem";
 import { AccountingType, GenericEvent } from "../accounting/lotsAccounting";
-import { EventType } from "./types";
+import { ContangoEvents, EventType } from "./types";
 
 export const createIdForPosition = ({ chainId, positionId }: Pick<GenericEvent, 'chainId'> & { positionId: string; }): `${number}_${string}` => `${chainId}_${positionId.toLowerCase()}`
 
@@ -17,7 +17,7 @@ export const createEventId = <T extends EventType>(
 ): `${number}_${number}_${string}_${number}_${T}` => `${chainId}_${blockNumber}_${transactionHash.toLowerCase()}_${logIndex}_${eventType}`;
 
 export const createFillItemId = (
-  { chainId, block: { number: blockNumber }, positionId }: Pick<GenericEvent, 'chainId' | 'block'> & { positionId: string; }
+  { chainId, blockNumber, positionId }: ContangoEvents & { positionId: string; }
 ) => `${chainId}_${blockNumber}_${positionId.toLowerCase()}` as const
 
 export const createIdForLot = (
@@ -30,12 +30,12 @@ export const decodeLotId = (id: string) => {
   return { chainId: parseInt(chainId), positionId, lotNumber: parseInt(lotNumber) };
 };
 
-export const createStoreKey = (
-  { chainId, block: { number: blockNumber }, transaction: { hash: transactionHash } }: Omit<GenericEvent, 'block' | 'logIndex' | 'params' | 'srcAddress'> & { block: { number: number } }
-) => `${chainId}-${blockNumber}-${transactionHash}` as const
+export const createStoreKey = ({ chainId, blockNumber, transactionHash }: Pick<ContangoEvents, 'chainId' | 'blockNumber' | 'transactionHash'>) => `${chainId}-${blockNumber}-${transactionHash}` as const
+export type StoreKey = ReturnType<typeof createStoreKey>
+
+export const createStoreKeyFromEvent = (event: GenericEvent) => createStoreKey({ chainId: event.chainId, blockNumber: event.block.number, transactionHash: event.transaction.hash })
 
 export type EventId = ReturnType<typeof createEventId>
-export type StoreKey = ReturnType<typeof createStoreKey>
 
 export const decodeEventId = (eventId: EventId): { chainId: number; blockNumber: number; transactionHash: string; logIndex: number; eventType: EventType; } => {
   const [chainId, blockNumber, transactionHash, logIndex, eventType] = eventId.split('_');

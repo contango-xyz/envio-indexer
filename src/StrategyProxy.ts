@@ -3,11 +3,12 @@ import { Hex, decodeAbiParameters, getContract, parseAbiParameters, toHex } from
 import { eventStore } from "./Store";
 import { eventsReducer } from "./accounting/processEvents";
 import { getOrCreateToken } from "./utils/getTokenDetails";
-import { createEventId } from "./utils/ids";
-import { EventType } from "./utils/types";
+import { createEventId, createStoreKeyFromEvent } from "./utils/ids";
+import { EventType, MigrationType } from "./utils/types";
 import { strategyBuilderAbi } from "./abis";
 import { clients } from "./clients";
 import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
+import { getPairForPositionId } from "./utils/common";
 
 export const decodeFeeEvent = (data: Hex) => {
   const [treasury, token, addressReceivingFees, amount, basisPoints] = decodeAbiParameters(
@@ -18,11 +19,12 @@ export const decodeFeeEvent = (data: Hex) => {
 }
 
 StrategyProxy.EndStrategy.handler(async ({ event, context }) => {
-  const snapshot = await eventStore.getCurrentPositionSnapshot({ event, context })
+  const storeKey = createStoreKeyFromEvent(event)
+  const snapshot = await eventStore.getCurrentPositionSnapshot({ storeKey, positionId: event.params.positionId, context })
   if (snapshot) {
     await eventsReducer({ ...snapshot, context })
     // safe to delete the snapshot here because we KNOW that it's the last event in the tx
-    eventStore.deletePositionSnapshot(event)
+    eventStore.deletePositionSnapshot(storeKey)
   }
 
 })
@@ -49,12 +51,21 @@ StrategyProxy.StragegyExecuted.handler(async ({ event, context }) => {
     }
 
     context.ContangoFeeCollectedEvent.set(entity)
-    eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.FEE_COLLECTED } })
+    eventStore.addLog({ ...entity, eventType: EventType.FEE_COLLECTED })
 
   }
 
   if (action === toHex("PositionMigrated", { size: 32 })) {
     const eventId = createEventId({ ...event, eventType: EventType.MIGRATED })
+    const oldPair = await getPairForPositionId({ positionId: event.params.position1, context, chainId: event.chainId })
+    const newPair = await getPairForPositionId({ positionId: event.params.position2, context, chainId: event.chainId })
+
+    const migrationType = (() => {
+      if (oldPair.debtToken.id !== newPair.debtToken.id) return MigrationType.SwapQuote
+      if (oldPair.collateralToken.id !== newPair.collateralToken.id) return MigrationType.SwapBase
+      return MigrationType.NoSwap
+    })()
+
     const entity: ContangoPositionMigratedEvent = {
       id: eventId,
       chainId: event.chainId,
@@ -65,7 +76,7 @@ StrategyProxy.StragegyExecuted.handler(async ({ event, context }) => {
       transactionHash: event.transaction.hash,
     }
     context.ContangoPositionMigratedEvent.set(entity)
-    eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.MIGRATED } })
+    eventStore.addLog({ ...entity, migrationType, eventType: EventType.MIGRATED })
 
   }
 })

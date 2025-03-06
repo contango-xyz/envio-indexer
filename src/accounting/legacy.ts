@@ -1,7 +1,7 @@
 import { ContangoPositionUpsertedEvent, Position, Token } from "generated";
 import { mulDiv } from "../utils/math-helpers";
-import { PartialFillItem, ReferencePriceSource } from "./helpers";
-
+import { PartialFillItem } from "./helpers";
+import { ReferencePriceSource } from "./helpers/prices";
 export enum CashflowCurrency {
   None,
   Base,

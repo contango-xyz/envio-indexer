@@ -1,13 +1,13 @@
 import { ContangoFeeCollectedEvent, Maestro } from "generated";
-import { eventsReducer } from "./accounting/processEvents";
-import { eventStore } from "./Store";
-import { getOrCreateToken } from "./utils/getTokenDetails";
-import { createEventId } from "./utils/ids";
-import { EventType } from "./utils/types";
 import { getContract } from "viem";
-import { clients } from "./clients";
+import { eventStore } from "./Store";
 import { maestroAbi } from "./abis";
+import { eventsReducer } from "./accounting/processEvents";
+import { clients } from "./clients";
 import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
+import { getOrCreateToken } from "./utils/getTokenDetails";
+import { createEventId, createStoreKeyFromEvent } from "./utils/ids";
+import { EventType } from "./utils/types";
 
 Maestro.Upgraded.contractRegister(async ({ event, context }) => {
   if (event.block.number >= getIMoneyMarketEventsStartBlock(event.chainId)) {
@@ -19,7 +19,8 @@ Maestro.Upgraded.contractRegister(async ({ event, context }) => {
 })
 
 Maestro.FeeCollected.handler(async ({ event, context }) => {
-  const snapshot = await eventStore.getCurrentPositionSnapshot({ event, context })
+  const storeKey = createStoreKeyFromEvent(event)
+  const snapshot = await eventStore.getCurrentPositionSnapshot({ storeKey, positionId: event.params.positionId, context })
   const token = await getOrCreateToken({ chainId: event.chainId, address: event.params.token, context })
   const eventId = createEventId({ ...event, eventType: EventType.FEE_COLLECTED })
   const entity: ContangoFeeCollectedEvent = {
@@ -37,7 +38,7 @@ Maestro.FeeCollected.handler(async ({ event, context }) => {
   }
 
   context.ContangoFeeCollectedEvent.set(entity)
-  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.FEE_COLLECTED } })
+  eventStore.addLog({ ...entity, eventType: EventType.FEE_COLLECTED })
 
   if (snapshot) {
     // we consider the fee event to be the last event in the tx

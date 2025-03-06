@@ -26,7 +26,7 @@ IMoneyMarket.Borrowed.handler(async ({ event, context }) => {
   }
 
   context.ContangoDebtEvent.set(entity)
-  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.DEBT } })
+  eventStore.addLog({ ...entity, eventType: EventType.DEBT })
 
 }, { wildcard: true })
 
@@ -50,7 +50,7 @@ IMoneyMarket.Repaid.handler(async ({ event, context }) => {
   }
 
   context.ContangoDebtEvent.set(entity)
-  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.DEBT } })
+  eventStore.addLog({ ...entity, eventType: EventType.DEBT })
 
 }, { wildcard: true })
 
@@ -75,7 +75,7 @@ IMoneyMarket.Lent.handler(async ({ event, context }) => {
   }
 
   context.ContangoCollateralEvent.set(entity)
-  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.COLLATERAL } })
+  eventStore.addLog({ ...entity, eventType: EventType.COLLATERAL })
 
 }, { wildcard: true })
 
@@ -99,6 +99,6 @@ IMoneyMarket.Withdrawn.handler(async ({ event, context }) => {
   }
 
   context.ContangoCollateralEvent.set(entity)
-  eventStore.addLog({ event, contangoEvent: { ...entity, eventType: EventType.COLLATERAL } })
+  eventStore.addLog({ ...entity, eventType: EventType.COLLATERAL })
 
 }, { wildcard: true })

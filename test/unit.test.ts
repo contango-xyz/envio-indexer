@@ -1,7 +1,6 @@
 import { expect } from 'chai'
 import { Position, SpotExecutor_SwapExecuted_event, TestHelpers } from 'generated'
 import { describe, it } from 'mocha'
-import { ReferencePriceSource } from '../src/accounting/helpers'
 import { AccountingType } from '../src/accounting/lotsAccounting'
 import { createTokenId } from '../src/utils/getTokenDetails'
 import { createIdForPosition, IdForPosition } from '../src/utils/ids'
@@ -13,6 +12,7 @@ import { createInstrumentId, getBalancesAtBlock } from '../src/utils/common'
 import { mulDiv } from '../src/utils/math-helpers'
 import { clients } from '../src/clients'
 import { arbitrum, mainnet } from 'viem/chains'
+import { ReferencePriceSource } from '../src/accounting/helpers/prices'
 const { MockDb } = TestHelpers
 
 const getFeeEventMaybe = (events: ReturnPromiseType<typeof getTransactionEvents>) => {
@@ -103,7 +103,7 @@ describe('indexer tests', () => {
       const asNumber = Number(longTimesShort) / Number(collateralToken.unit)
       expect(asNumber).to.approximately(1, 0.001)
 
-      if (fillItem.fillItemType === FillItemType.LiquidatedFull || fillItem.fillItemType === FillItemType.LiquidatedPartial) {
+      if (fillItem.fillItemType === FillItemType.Liquidated) {
         liquidationPenaltyBase += mulDiv(fillItem.realisedPnl_short, fillItem.liquidationPenalty, BigInt(1e4))
         liquidationPenaltyQuote += mulDiv(fillItem.realisedPnl_long, fillItem.liquidationPenalty, BigInt(1e4))
       }
@@ -221,7 +221,7 @@ describe('indexer tests', () => {
           const eventsInMigrationTransaction = await getTransactionEvents(id, transactionHashes[i])
           const fillItems = mockDb.entities.FillItem.getAll()
           const positionBeforeMigration = positionSnapshots[positionSnapshots.length - 1]
-          const [migrationOpenFillItem, migrationCloseFillItem] = fillItems.reverse()
+          const [migrationFillItem] = fillItems.reverse()
 
           // ensure that the number of lots is the same before and after migration
           expect(lotsCountAfterMigration).to.equal(lotsCountBefore)
@@ -246,11 +246,6 @@ describe('indexer tests', () => {
           
           // check that the migratedTo_id reference is set correctly
           expect(oldPosition.migratedTo_id).to.equal(newPosition.id)
-
-          // ensure we're updated these on the new position
-          expect(newPosition.createdAtBlock).to.be.greaterThan(positionBeforeMigration.createdAtBlock)
-          expect(newPosition.createdAtTimestamp).to.be.greaterThan(positionBeforeMigration.createdAtTimestamp)
-          expect(newPosition.createdAtTransactionHash).to.not.equal(positionBeforeMigration.createdAtTransactionHash)
           
           // ensure that the instrument_id is set correctly
           const [oldInstrumentId, newInstrumentId] = [oldPositionId, newPositionId].map(id => createInstrumentId({ chainId, instrumentId: id}))
@@ -261,83 +256,50 @@ describe('indexer tests', () => {
           expect(oldPosition.instrument_id).to.equal(newPosition.instrument_id)
 
           // check that the fillItemTypes are set correctly
-          expect(migrationOpenFillItem.fillItemType).to.equal(FillItemType.MigrationOpen)
-          expect(migrationCloseFillItem.fillItemType).to.equal(FillItemType.MigrationClose)
+          expect(migrationFillItem.fillItemType).to.equal(FillItemType.MigrateLendingMarket)
 
           // check that the new position has the same collateral and debt as the old position PLUS the interest accrued has been settled
-          expect(newPosition.collateral).to.equal(positionBeforeMigration.collateral + migrationCloseFillItem.lendingProfitToSettle)
-          expect(newPosition.debt).to.equal(positionBeforeMigration.debt + migrationCloseFillItem.debtCostToSettle)
-          expect(newPosition.accruedLendingProfit).to.equal(positionBeforeMigration.accruedLendingProfit + migrationCloseFillItem.lendingProfitToSettle)
-          expect(newPosition.accruedDebtCost).to.equal(positionBeforeMigration.accruedDebtCost + migrationCloseFillItem.debtCostToSettle)
+          expect(newPosition.collateral).to.equal(positionBeforeMigration.collateral + migrationFillItem.lendingProfitToSettle)
+          expect(newPosition.debt).to.equal(positionBeforeMigration.debt + migrationFillItem.debtCostToSettle)
+          expect(newPosition.accruedLendingProfit).to.equal(positionBeforeMigration.accruedLendingProfit + migrationFillItem.lendingProfitToSettle)
+          expect(newPosition.accruedDebtCost).to.equal(positionBeforeMigration.accruedDebtCost + migrationFillItem.debtCostToSettle)
 
           // we currently don't have any migrations that have cashflows, but if we ever do, we need to decide where to assign those cashflows (in terms of fill items)
           // if we make the right hand side of the assertion this way, then we'll be alerted to the fact that we need to update the code
-          expect(newPosition.cashflowBase).to.equal(positionBeforeMigration.cashflowBase + migrationCloseFillItem.cashflowBase + migrationOpenFillItem.cashflowBase)
-          expect(newPosition.cashflowQuote).to.equal(positionBeforeMigration.cashflowQuote + migrationCloseFillItem.cashflowQuote + migrationOpenFillItem.cashflowQuote)
+          expect(newPosition.cashflowBase).to.equal(positionBeforeMigration.cashflowBase + migrationFillItem.cashflowBase)
+          expect(newPosition.cashflowQuote).to.equal(positionBeforeMigration.cashflowQuote + migrationFillItem.cashflowQuote)
 
           // if/when fees are charged for migrations, we need to assign the fee to either the closing or opening fill item
           // the choice is arbitrary, but we need to be consistent -> I've decided to assign it to the closing fill item
           // Given this, let's first make sure that the opening fill item has no fees
-          expect(migrationOpenFillItem.fee_long).to.equal(0n)
-          expect(migrationOpenFillItem.fee_short).to.equal(0n)
-          expect(migrationOpenFillItem.fee).to.equal(0n)
-          expect(migrationOpenFillItem.feeToken_id).to.be.undefined
+          expect(migrationFillItem.fee_long).to.equal(0n)
+          expect(migrationFillItem.fee_short).to.equal(0n)
+          expect(migrationFillItem.fee).to.equal(0n)
+          expect(migrationFillItem.feeToken_id).to.be.undefined
 
           const feeEvent = getFeeEventMaybe(eventsInMigrationTransaction)
 
           // basic assertions about the fee event being set on the closing fill item
           if (feeEvent && feeEvent.amount > 0n) {
-            expect(migrationCloseFillItem.fee).to.equal(feeEvent.amount)
-            expect(migrationCloseFillItem.fee_long).to.not.equal(0n)
-            expect(migrationCloseFillItem.fee_short).to.not.equal(0n)
-            expect(migrationCloseFillItem.feeToken_id).to.equal(createTokenId({ chainId, address: feeEvent.token }))
+            expect(migrationFillItem.fee).to.equal(feeEvent.amount)
+            expect(migrationFillItem.fee_long).to.not.equal(0n)
+            expect(migrationFillItem.fee_short).to.not.equal(0n)
+            expect(migrationFillItem.feeToken_id).to.equal(createTokenId({ chainId, address: feeEvent.token }))
           } else {
-            expect(migrationCloseFillItem.fee).to.equal(0n)
-            expect(migrationCloseFillItem.fee_long).to.equal(0n)
-            expect(migrationCloseFillItem.fee_short).to.equal(0n)
-            expect(migrationCloseFillItem.feeToken_id).to.be.undefined
+            expect(migrationFillItem.fee).to.equal(0n)
+            expect(migrationFillItem.fee_long).to.equal(0n)
+            expect(migrationFillItem.fee_short).to.equal(0n)
+            expect(migrationFillItem.feeToken_id).to.be.undefined
           }
 
           // then check that the new position has the fees set correctly.
           // the new position's fees should be the sum of the old position's fees and the fees from the migration
-          expect(newPosition.fees_long).to.equal(positionBeforeMigration.fees_long + migrationCloseFillItem.fee_long)
-          expect(newPosition.fees_short).to.equal(positionBeforeMigration.fees_short + migrationCloseFillItem.fee_short)
-
-          // no cashflows
-          expect(migrationOpenFillItem.cashflow).to.equal(0n)
-          expect(migrationOpenFillItem.cashflowBase).to.equal(0n)
-          expect(migrationOpenFillItem.cashflowQuote).to.equal(0n)
-
-          expect(migrationCloseFillItem.cashflow).to.equal(0n)
-          expect(migrationCloseFillItem.cashflowBase).to.equal(0n)
-          expect(migrationCloseFillItem.cashflowQuote).to.equal(0n)
-
-          // the fill costs should be the inverse of each other
-          expect(migrationOpenFillItem.fillCost_long).to.equal(migrationCloseFillItem.fillCost_long * -1n)
-          expect(migrationOpenFillItem.fillCost_short).to.equal(migrationCloseFillItem.fillCost_short * -1n)
-          
-          // we know the calculation is correct, we just want to make sure the values are populated (no need to test the precise values)
-          expect(migrationOpenFillItem.fillPrice_long).to.not.equal(0n)
-          expect(migrationOpenFillItem.fillPrice_short).to.not.equal(0n)
-          
-          // the fill prices should be the same on both fill items
-          expect(migrationOpenFillItem.fillPrice_long).to.equal(migrationCloseFillItem.fillPrice_long)
-          expect(migrationOpenFillItem.fillPrice_short).to.equal(migrationCloseFillItem.fillPrice_short)
-
-          // both fill items should have the same price source, and the price source should be the fill price
-          expect(migrationCloseFillItem.referencePriceSource).to.equal(ReferencePriceSource.MarkPrice)
-          expect(migrationOpenFillItem.referencePriceSource).to.equal(ReferencePriceSource.MarkPrice)
-
-          expect(migrationOpenFillItem.referencePrice_long).to.not.equal(0n)
-          expect(migrationOpenFillItem.referencePrice_short).to.not.equal(0n)
-
-          // as always, an opening fill item shouldn't have any realised pnl
-          expect(migrationOpenFillItem.realisedPnl_long).to.equal(0n)
-          expect(migrationOpenFillItem.realisedPnl_short).to.equal(0n)
+          expect(newPosition.fees_long).to.equal(positionBeforeMigration.fees_long + migrationFillItem.fee_long)
+          expect(newPosition.fees_short).to.equal(positionBeforeMigration.fees_short + migrationFillItem.fee_short)
 
           // because this isn't an actual closing fill, it's just being migrated to a different market, it shouldn't have any realised pnl!
-          expect(migrationCloseFillItem.realisedPnl_long).to.equal(0n)
-          expect(migrationCloseFillItem.realisedPnl_short).to.equal(0n)
+          expect(migrationFillItem.realisedPnl_long).to.equal(0n)
+          expect(migrationFillItem.realisedPnl_short).to.equal(0n)
 
           // given that a migration doesn't realise any pnl, the realised pnl fields on the new position should be the same as the old position
           expect(newPosition.realisedPnl_long).to.equal(positionBeforeMigration.realisedPnl_long)
@@ -425,8 +387,8 @@ describe('indexer tests', () => {
           expect(oldPosition.instrument_id).to.not.equal(newPosition.instrument_id)
 
           // check that the fillItemTypes are set correctly
-          expect(migrationOpenFillItem.fillItemType).to.equal(FillItemType.MigrationOpen)
-          expect(migrationCloseFillItem.fillItemType).to.equal(FillItemType.MigrationClose)
+          expect(migrationOpenFillItem.fillItemType).to.equal(FillItemType.MigrateBaseCurrencyOpen)
+          expect(migrationCloseFillItem.fillItemType).to.equal(FillItemType.MigrateBaseCurrencyClose)
 
           const swapEvent = getSwapEventMaybe(eventsInMigrationTransaction)
 
@@ -520,6 +482,53 @@ describe('indexer tests', () => {
 
       expect(newPositionFound).to.be.true
     })
+  })
+
+  it('Migration from before the PositionMigrated event', async function() {
+    this.timeout(30000)
+    const oldId = createIdForPosition({ chainId: 42161, positionId: '0x5745544855534443000000000000000001ffffffff0000000000000000000a17' })
+    const newId = createIdForPosition({ chainId: 42161, positionId: '0x574554485553444300000000000000000bffffffff0000000000000000000ad2' })
+    mockDb = await processTransactions(oldId, mockDb)
+    const fillItems = mockDb.entities.FillItem.getAll()
+    const lots = mockDb.entities.Lot.getAll()
+    const longLots = lots.filter(lot => lot.accountingType === AccountingType.Long)
+    const shortLots = lots.filter(lot => lot.accountingType === AccountingType.Short)
+
+    const fillItem = fillItems.find(item => item.fillItemType === FillItemType.MigrateLendingMarket)
+    if (!fillItem) throw new Error('Migration event not found in test!')
+
+    const oldPosition = mockDb.entities.Position.get(oldId)
+    if (!oldPosition) throw new Error('Position not found in test!')
+
+    expect(oldPosition.migratedTo_id).to.equal(newId)
+    expect(oldPosition.realisedPnl_long).to.equal(0n)
+    expect(oldPosition.realisedPnl_short).to.equal(0n)
+
+    expect(fillItem.debtDelta).to.equal(1633n)
+    expect(fillItem.collateralDelta).to.equal(0n)
+    expect(fillItem.cashflowQuote).to.equal(-1633n) // 0.001633 USDC was sent to the vault
+    expect(fillItem.cashflowBase).to.equal(0n)
+    expect(fillItem.cashflow).to.equal(0n)
+    expect(fillItem.cashflowToken_id).to.be.undefined
+    expect(fillItem.fee).to.equal(0n)
+    expect(fillItem.fee_long).to.equal(0n)
+    expect(fillItem.fee_short).to.equal(0n)
+    expect(fillItem.feeToken_id).to.be.undefined
+    expect(fillItem.fillItemType).to.equal(FillItemType.MigrateLendingMarket)
+    expect(fillItem.fillPrice_long).to.equal(0n)
+    expect(fillItem.fillPrice_short).to.equal(0n)
+    
+    const newPosition = mockDb.entities.Position.get(newId)
+    if (!newPosition) throw new Error('New position not found in test!')
+
+    expect(newPosition.id).to.equal(newId)
+    expect(newPosition.migratedTo_id).to.equal(undefined)
+    expect(newPosition.collateral).to.equal(BigInt(0.009409545711451312e18))
+    expect(newPosition.debt).to.equal(BigInt(16.350110e6))
+
+    expect(longLots.reduce((acc, lot) => acc + lot.openCost, 0n)).to.equal(newPosition.longCost)
+    expect(shortLots.reduce((acc, lot) => acc + lot.openCost, 0n)).to.equal(newPosition.shortCost)
+
   })
 
   it('Some random migration', async function() {
@@ -652,6 +661,7 @@ describe('indexer tests', () => {
     await highLevelInvariants(id)
   })
 
+  // test with positon that uses new IMoneyMarket events
   it('USDT/USDC - Arbitrum - Using new events (OPEN->REDUCE->CLOSE)', async function() {
     this.timeout(30000)
     const id = createIdForPosition({ chainId: 42161, positionId: '0x55534454555344432e6e00000000000011ffffffff00000000000000000058a8' })
@@ -874,6 +884,11 @@ describe('indexer tests', () => {
         const transactionHashes = await getTransactionHashes(id)    
         for (let i = 0; i < transactionHashes.length; i++) {
           mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+          // const fillItems = mockDb.entities.FillItem.getAll()
+          // const position = mockDb.entities.Position.get(id)
+          // if (!position) throw new Error('Position not found in test!')
+          // const fillItem = fillItems[i]
+          // console.log('fillItem', fillItem)
         }
         await highLevelInvariants(id, 'failing')
       })

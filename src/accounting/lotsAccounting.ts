@@ -1,8 +1,8 @@
 import { genericEvent } from "envio/src/Internal.gen";
-import { FillItem, Lot, Position, handlerContext } from 'generated';
+import { Lot, Position, handlerContext } from 'generated';
 import { createIdForLot } from "../utils/ids";
 import { max, min, mulDiv } from "../utils/math-helpers";
-import { Mutable } from "../utils/types";
+import { ContangoEvents, Mutable } from "../utils/types";
 import { PartialFillItem } from "./helpers";
 
 export enum AccountingType {
@@ -13,8 +13,7 @@ export enum AccountingType {
 export type GenericEvent = genericEvent<{}, { number: number; timestamp: number }, { hash: string }>
 export type EventWithPositionId = genericEvent<{ positionId: string }, { number: number; timestamp: number }, { hash: string }>
 
-export const initialiseLot = ({ event, position, accountingType, size, cost }: { size: bigint; cost: bigint; accountingType: AccountingType; event: GenericEvent; position: Position; }) => {
-  const { chainId, block: { number: blockNumber }, transaction: { hash: transactionHash }, block: { timestamp: blockTimestamp } } = event
+export const initialiseLot = ({ chainId, blockNumber, transactionHash, blockTimestamp, position, accountingType, size, cost }: ContangoEvents & { size: bigint; cost: bigint; accountingType: AccountingType; position: Position; }) => {
 
   const lot: Lot ={
     id: 'unknown', // a lot should never be saved with an unknown id!
@@ -84,15 +83,10 @@ export const allocateFundingProfitToLots = async ({ lots, fundingProfitToSettle 
 }
 
 export const handleCloseSize = ({
-  position,
-  partialFillItem,
   lots,
   sizeDelta,
   closedCostRef,
-  ...event
-}: GenericEvent & {
-  partialFillItem: PartialFillItem;
-  position: Position;
+}: {
   lots: Mutable<Lot>[];
   sizeDelta: bigint;
   closedCostRef: Mutable<{ value: bigint }>;
@@ -116,10 +110,6 @@ export const handleCloseSize = ({
 
     newLot.openCost += closedCost
     newLot.grossOpenCost += grossClosedCost
-
-    if (closedSize === -lot.size) {
-      newLot.closedAtBlock = event.block.number
-    }
 
     return newLot
   })
@@ -145,23 +135,61 @@ export const loadLots = async ({ position, context }: { position: Position; cont
 
 }
 
-export const saveLots = async ({ lots, context }: { lots: Lot[]; context: handlerContext }) => {
-  // Save all lots in parallel
-  const openLots = lots.filter((lot) => !lot.closedAtBlock).map((lot, idx) => ({ ...lot, id: createIdForLot({ chainId: lot.chainId, positionId: lot.contangoPositionId, index: idx }) }))
-  const openIds = new Set<Lot['id']>(openLots.map(lot => lot.id))
+export const allocateInterestToLots = async ({ lots, lendingProfitToSettle, debtCostToSettle }: { lots: Lot[]; lendingProfitToSettle: bigint; debtCostToSettle: bigint; }) => {
+  let longLots: Mutable<Lot>[] = [...lots.filter(lot => lot.accountingType === AccountingType.Long)] // create a copy
+  let shortLots: Mutable<Lot>[] = [...lots.filter(lot => lot.accountingType === AccountingType.Short)] // create a copy
 
-  for (const lot of lots) {
-    if (!openIds.has(lot.id) && lot.id !== 'unknown') {
-      context.Lot.deleteUnsafe(lot.id)
-    }
-  }
+  longLots = await allocateFundingProfitToLots({ lots: longLots, fundingProfitToSettle: lendingProfitToSettle }) // size grows, which is a good thing
+  longLots = await allocateFundingCostToLots({ lots: longLots, fundingCostToSettle: debtCostToSettle }) // cost grows
 
-  await Promise.all(openLots.map((lot) => context.Lot.set(lot)))
+  shortLots = await allocateFundingProfitToLots({ lots: shortLots, fundingProfitToSettle: -debtCostToSettle }) // size grows, but it's actually a negative thing because your size is your debt!
+  shortLots = await allocateFundingCostToLots({ lots: shortLots, fundingCostToSettle: -lendingProfitToSettle }) // cost grows, but it's actually a good thing because your cost is your collateral!
 
-  return openLots
+  return { longLots, shortLots }
 }
 
-export const savePosition = async ({ position, lots, context }: { position: Position; lots: Lot[]; context: handlerContext }) => {
-  const savedLots = await saveLots({ lots, context })
-  context.Position.set({ ...position, lotCount: savedLots.length })
+
+export const updateLots = async ({ lots, collateralDelta, debtDelta, lendingProfitToSettle, debtCostToSettle, position, fillCost_short, fillCost_long, event }: { event: ContangoEvents; fillCost_short: bigint; fillCost_long: bigint; position: Position; debtCostToSettle: bigint; lendingProfitToSettle: bigint; lots: Lot[]; collateralDelta: bigint; debtDelta: bigint; }) => {
+
+  let { longLots, shortLots } = await allocateInterestToLots({ lots, lendingProfitToSettle, debtCostToSettle })
+
+  let realisedPnl_long = 0n
+  let realisedPnl_short = 0n
+
+  if (debtDelta > 0n) {
+    // create new short lot if adding debt
+    shortLots.push(
+      initialiseLot({
+        ...event,
+        position,
+        accountingType: AccountingType.Short,
+        size: -debtDelta,
+        cost: fillCost_short,
+      })
+    )
+  } else if (debtDelta < 0n) {
+    const closedCostRef = { value: 0n }
+    shortLots = handleCloseSize({ closedCostRef, lots: shortLots, sizeDelta: -debtDelta })
+    realisedPnl_short = fillCost_short - closedCostRef.value
+  }
+
+  if (collateralDelta > 0n) {
+    // create new long lot if adding collateral
+    longLots.push(
+      initialiseLot({
+        ...event,
+        position,
+        accountingType: AccountingType.Long,
+        size: collateralDelta,
+        cost: fillCost_long,
+      })
+    )
+  } else if (collateralDelta < 0n) {
+    const closedCostRef = { value: 0n }
+    longLots = handleCloseSize({ closedCostRef, lots: longLots, sizeDelta: collateralDelta })
+    realisedPnl_long = fillCost_long - closedCostRef.value
+  }
+
+  return { longLots, shortLots, realisedPnl_long, realisedPnl_short }
+
 }

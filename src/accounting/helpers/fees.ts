@@ -1,18 +1,12 @@
 import { Token } from "generated";
-import { mulDiv } from "../../utils/math-helpers";
 import { FeeCollectedEvent, PositionUpsertedEvent } from "../../utils/types";
 import { CashflowCurrency } from "../legacy";
-import { FillItemWithPrices } from "./prices";
+import { PriceConverters } from "./prices";
 
-const getBaseToQuoteFn = ({ price_long, collateralToken }: { price_long: bigint; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, price_long, collateralToken.unit)
-const getQuoteToBaseFn = ({ price_long, collateralToken }: { price_long: bigint; collateralToken: Token; }) => (amount: bigint) => mulDiv(amount, collateralToken.unit, price_long)
+export const withFees = ({ converters, feeEvents, positionUpsertedEvents, collateralToken, debtToken }: { converters: PriceConverters; feeEvents: FeeCollectedEvent[]; positionUpsertedEvents: PositionUpsertedEvent[]; collateralToken: Token; debtToken: Token }) => {
+  const { baseToQuote, quoteToBase } = converters
 
-
-export const withFees = ({ fillItem, feeEvents, positionUpsertedEvents, collateralToken, debtToken }: { fillItem: FillItemWithPrices; feeEvents: FeeCollectedEvent[]; positionUpsertedEvents: PositionUpsertedEvent[]; collateralToken: Token; debtToken: Token }) => {
-  const baseToQuote = getBaseToQuoteFn({ price_long: fillItem.referencePrice_long, collateralToken })
-  const quoteToBase = getQuoteToBaseFn({ price_long: fillItem.referencePrice_long, collateralToken })
-
-  let feeToken_id = debtToken.id
+  let feeToken_id;
   let fee = 0n
   let fee_long = 0n
   let fee_short = 0n
@@ -40,7 +34,7 @@ export const withFees = ({ fillItem, feeEvents, positionUpsertedEvents, collater
     fee_short += quoteToBase(fee)
   }
 
-  return { ...fillItem, feeToken_id, fee, fee_long, fee_short }
+  return { feeToken_id, fee, fee_long, fee_short }
 }
 
 export type FillItemWithPricesAndFees = Awaited<ReturnType<typeof withFees>>

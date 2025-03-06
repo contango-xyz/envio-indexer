@@ -1,9 +1,10 @@
 import { Position, Token } from "generated"
 import { getLiquidationPenalty } from "../../Liquidations/common"
-import { max, mulDiv } from "../../utils/math-helpers"
+import { max } from "../../utils/math-helpers"
 import { CollateralEvent, DebtEvent, FillItemType, LiquidationEvent, PositionUpsertedEvent } from "../../utils/types"
 import { CashflowCurrency } from "../legacy"
-import { FillItemWithPricesAndFees } from "./fees"
+import { PriceConverters, ReferencePrices } from "./prices"
+import { OrganisedEvents } from "../helpers"
 
 const processDebtEvents = ({ position, debtEvents }: { position: Position; debtEvents: DebtEvent[] }) => {
   return debtEvents.reduce((acc, event) => {
@@ -19,21 +20,18 @@ const processCollateralEvents = ({ position, collateralEvents }: { position: Pos
   }, { lendingProfitToSettle: 0n, collateralDelta: 0n })
 }
 
-const calculateDebtFromPositionUpsertedEvent = ({ position, positionUpsertedEvents, fillItem, collateralToken }: { collateralToken: Token; position: Position; positionUpsertedEvents: PositionUpsertedEvent[]; fillItem: FillItemWithPricesAndFees }) => {
+const calculateDebtFromPositionUpsertedEvent = ({ position, positionUpsertedEvents, converters }: { converters: PriceConverters; position: Position; positionUpsertedEvents: PositionUpsertedEvent[] }) => {
+  const { baseToQuote, quoteToBase } = converters
   let debtDelta = 0n
   let debtCostToSettle = 0n
 
   for (const event of positionUpsertedEvents) {
-    const feeInBase = (() => {
-      if (event.fee === 0n) return 0n
-      if (Number(event.feeCcy) === CashflowCurrency.Base) return event.fee
-      return mulDiv(event.fee, collateralToken.unit, fillItem.referencePrice_long)
-    })()
+    const feeInBase = Number(event.feeCcy) === CashflowCurrency.Base ? event.fee : quoteToBase(event.fee)
     if (Number(event.cashflowCcy) === CashflowCurrency.Base) {
       const amountBorrowed = event.quantityDelta - (event.cashflow - feeInBase)
-      debtDelta += mulDiv(amountBorrowed, fillItem.referencePrice_long, collateralToken.unit)
+      debtDelta += baseToQuote(amountBorrowed)
     } else {
-      const amountOut = mulDiv(event.quantityDelta - feeInBase, fillItem.referencePrice_long, collateralToken.unit)
+      const amountOut = baseToQuote(event.quantityDelta - feeInBase)
       debtDelta += amountOut - event.cashflow
     }
   }
@@ -47,11 +45,11 @@ const calculateDebtFromPositionUpsertedEvent = ({ position, positionUpsertedEven
 }
 
 
-const calculateDebtValues = ({ position, debtEvents, positionUpsertedEvents, fillItem, collateralToken }: { collateralToken: Token; fillItem: FillItemWithPricesAndFees; position: Position; debtEvents: DebtEvent[]; positionUpsertedEvents: PositionUpsertedEvent[] }) => {
+const calculateDebtValues = ({ position, debtEvents, positionUpsertedEvents, converters }: { converters: PriceConverters; position: Position; debtEvents: DebtEvent[]; positionUpsertedEvents: PositionUpsertedEvent[] }) => {
   const { debtCostToSettle, debtDelta } = processDebtEvents({ position, debtEvents })
   if (debtDelta !== 0n) return { debtCostToSettle, debtDelta }
 
-  const result = calculateDebtFromPositionUpsertedEvent({ position, positionUpsertedEvents, fillItem, collateralToken })
+  const result = calculateDebtFromPositionUpsertedEvent({ position, positionUpsertedEvents, converters })
   return result
 }
 
@@ -65,22 +63,19 @@ const calculateCollateralValues = ({ position, collateralEvents, positionUpserte
   return { lendingProfitToSettle, collateralDelta }
 }
 
-export const calculateDebtAndCollateral = ({ position, debtEvents, collateralEvents, positionUpsertedEvents, fillItem, collateralToken, liquidationEvents }: { liquidationEvents: LiquidationEvent[]; collateralToken: Token; fillItem: FillItemWithPricesAndFees; position: Position; debtEvents: DebtEvent[]; collateralEvents: CollateralEvent[]; positionUpsertedEvents: PositionUpsertedEvent[] }) => {
+export const calculateDebtAndCollateral = ({ position, debtEvents, collateralEvents, positionUpsertedEvents, converters, liquidationEvents }: OrganisedEvents & { position: Position; converters: PriceConverters }) => {
   if (liquidationEvents.length > 0) {
     const [{ collateralDelta, debtDelta, lendingProfitToSettle, debtCostToSettle }] = liquidationEvents
-    const isClosingFill = (position.collateral + lendingProfitToSettle) - collateralDelta <= 0n
     return {
-      ...fillItem,
       collateralDelta,
       debtDelta,
       lendingProfitToSettle: 0n, // still puzzled as to why the tests pass perfectly with this value
       debtCostToSettle: 0n, // same here
-      liquidationPenalty: getLiquidationPenalty({ collateralToken, collateralDelta, debtDelta, referencePrice: fillItem.referencePrice_long }),
-      fillItemType: isClosingFill ? FillItemType.LiquidatedFull : FillItemType.LiquidatedPartial,
+      fillItemType: FillItemType.Liquidated,
     }
   }
 
-  const debtValues = calculateDebtValues({ position, debtEvents, positionUpsertedEvents, fillItem, collateralToken })
+  const debtValues = calculateDebtValues({ position, debtEvents, positionUpsertedEvents, converters })
   const collateralValues = calculateCollateralValues({ position, collateralEvents, positionUpsertedEvents })
 
   const fillItemType = (() => {
@@ -89,7 +84,7 @@ export const calculateDebtAndCollateral = ({ position, debtEvents, collateralEve
     return FillItemType.Modified
   })()
 
-  return { ...fillItem, ...debtValues, ...collateralValues, liquidationPenalty: 0n, fillItemType }
+  return { ...debtValues, ...collateralValues, fillItemType }
 }
 
 export type FillItemWithPricesFeesDebtAndCollateral = ReturnType<typeof calculateDebtAndCollateral>

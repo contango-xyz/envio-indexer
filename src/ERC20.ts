@@ -28,7 +28,7 @@ const createContangoEvent = (event: ERC20_Transfer_event): TransferEvent => ({
 })
 
 ERC20.Transfer.handler(async ({ event }) => {
-  eventStore.addLog({ event, contangoEvent: createContangoEvent(event) })
+  eventStore.addLog(createContangoEvent(event))
 },
 {
   wildcard: true,
@@ -46,7 +46,7 @@ WrappedNative.Deposit.handler(async ({ event }) => {
     }
   }
 
-  eventStore.addLog({ event, contangoEvent: createContangoEvent(erc20Event) })
+  eventStore.addLog(createContangoEvent(erc20Event))
 },
 {
   eventFilters: wrappedNativeDepositFilters
@@ -63,7 +63,7 @@ WrappedNative.Withdrawal.handler(async ({ event }) => {
     }
   }
 
-  eventStore.addLog({ event, contangoEvent: createContangoEvent(erc20Event) })
+  eventStore.addLog(createContangoEvent(erc20Event))
 },
 {
   eventFilters: wrappedNativeWithdrawalFilters

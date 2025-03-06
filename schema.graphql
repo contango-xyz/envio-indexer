@@ -42,7 +42,7 @@ type FillItem {
   cashflowQuote: BigInt!
   cashflowBase: BigInt!
   cashflow: BigInt!
-  cashflowToken: Token!
+  cashflowToken: Token
 
   cashflowSwap: ContangoSwapEvent
 
@@ -155,7 +155,7 @@ type PositionNFT_Transfer {
   chainId: Int!
   from: String!
   to: String!
-  tokenId: BigInt!
+  contangoPositionId: String!
 }
 
 type ERC20_Transfer {

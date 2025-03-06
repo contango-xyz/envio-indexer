@@ -10,7 +10,7 @@ import { createPosition } from "./accounting/positions";
 import { eventStore } from "./Store";
 import { createInstrumentId, getPosition, getPositionSafe } from "./utils/common";
 import { getOrCreateToken } from "./utils/getTokenDetails";
-import { createEventId } from "./utils/ids";
+import { createEventId, createStoreKeyFromEvent } from "./utils/ids";
 import { strategyContractsAddresses } from "./utils/previousContractAddresses";
 import { EventType, PositionUpsertedEvent } from "./utils/types";
 import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
@@ -29,9 +29,10 @@ ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
     transactionHash: event.transaction.hash,
     eventType: EventType.POSITION_UPSERTED,
   }
-  eventStore.addLog({ event, contangoEvent })
+  eventStore.addLog(contangoEvent)
 
-  await eventStore.getCurrentPositionSnapshot({ event, context })
+  const storeKey = createStoreKeyFromEvent(event)
+  await eventStore.getCurrentPositionSnapshot({ storeKey, positionId: event.params.positionId, context })
 })
 
 // On create, the NFT transfer event is emitted before the UnderlyingPositionCreated event
@@ -40,6 +41,19 @@ PositionNFT.Transfer.handler(async ({ event, context }) => {
   const [to, from] = [event.params.to, event.params.from].map(address => address.toLowerCase()) as Hex[]
 
   if (event.srcAddress.toLowerCase() !== '0xc2462f03920d47fc5b9e2c5f0ba5d2ded058fd78') return; // bug in envio causing this handler to pick up some scam tsx for example on this tx hash: 0xc1d5865badca9ee1f7d787c1d69f42621dd10a6ac8affad2d8d3d89ce9393ae2
+
+  eventStore.addLog({
+    ...event,
+    eventType: EventType.TRANSFER_NFT,
+    contangoPositionId: positionId,
+    blockNumber: event.block.number,
+    blockTimestamp: event.block.timestamp,
+    transactionHash: event.transaction.hash,
+    chainId: event.chainId,
+    id: createEventId({ ...event, eventType: EventType.TRANSFER_NFT }),
+    from,
+    to,
+  })
 
   if (event.params.from !== zeroAddress) {
     // if the transfer is to the strategy builder, we don't update the owner.

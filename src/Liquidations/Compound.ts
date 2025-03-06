@@ -4,7 +4,7 @@ import { eventsReducer } from "../accounting/processEvents";
 import { clients } from "../clients";
 import { eventStore } from "../Store";
 import { getInterestToSettleOnLiquidation } from "../utils/common";
-import { createEventId } from "../utils/ids";
+import { createEventId, createStoreKeyFromEvent } from "../utils/ids";
 import { EventType } from "../utils/types";
 import { getPositionIdForProxyAddress } from "./common";
 
@@ -15,7 +15,8 @@ CompoundLiquidations.LiquidateCompound.handler(async ({ event, context }) => {
   const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.borrower, context })
 
   if (positionId) {
-    const snapshot = await eventStore.getCurrentPositionSnapshot({ event: { ...event, params: { positionId } }, context })
+    const storeKey = createStoreKeyFromEvent(event)
+    const snapshot = await eventStore.getCurrentPositionSnapshot({ storeKey, positionId, context })
     if (!snapshot) {
       console.error(`no snapshot found for positionId: ${positionId} - chainId: ${event.chainId}`, event)
       return
@@ -39,7 +40,7 @@ CompoundLiquidations.LiquidateCompound.handler(async ({ event, context }) => {
       debtCostToSettle,
     }
     context.ContangoLiquidationEvent.set(liquidationEvent)
-    eventStore.addLog({ event: { ...event, params: { positionId } }, contangoEvent: { ...liquidationEvent, eventType: EventType.LIQUIDATION } })
+    eventStore.addLog({ ...liquidationEvent, eventType: EventType.LIQUIDATION })
 
     await eventsReducer({ ...snapshot, context })
   }
