@@ -17,7 +17,7 @@ import { createEventId } from "./utils/ids";
 import { strategyContractsAddresses } from "./utils/previousContractAddresses";
 import { EventType, PositionUpsertedEvent } from "./utils/types";
 
-// re-run indexing again again
+// re-run indexing again again again
 ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
   const contangoEvent: PositionUpsertedEvent = {
     ...event.params,

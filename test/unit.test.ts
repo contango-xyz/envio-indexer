@@ -83,10 +83,7 @@ describe('indexer tests', () => {
   }
 
   async function highLevelInvariantsForLiquidation(id: IdForPosition) {
-    const position = mockDb.entities.Position.get(id)
-    if (!position) throw new Error('Position not found in test!')
-    const fillItems = mockDb.entities.FillItem.getAll()
-    const { debtToken, collateralToken } = await getTokensForPosition(position)
+    const { fillItems, position, debtToken, collateralToken } = await getAssertionValues(id)
 
     const aggregatedQuoteCashflow = fillItems.reduce((acc, fillItem) => acc + fillItem.cashflowQuote, 0n)
     const aggregatedBaseCashflow = fillItems.reduce((acc, fillItem) => acc + fillItem.cashflowBase, 0n)
@@ -200,6 +197,12 @@ describe('indexer tests', () => {
       newPositionId: '0x5745544855534443000000000000000011ffffffff00000000000000000053e2',
       description: 'ETH/USDC.e long - Chain: Arbitrum - Number: #21105'
     },
+    // {
+    //   chainId: 1,
+    //   oldPositionId: '0x7355534465444149000000000000000008ffffffff0000000014000000000052',
+    //   newPositionId: '0x7355534465444149000000000000000008ffffffff000000000b000000000070',
+    //   description: 'Mainnet migration failing in prod',
+    // }
     // {
     //   chainId: 42161,
     //   oldPositionId: '0x5745544855534443000000000000000001ffffffff000000000000000000058f',

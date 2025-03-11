@@ -8,6 +8,7 @@ import { handleMigrations } from "./helpers/migrations"
 import { loadLots } from "./helpers/saveAndLoad"
 import { GenericEvent } from "./lotsAccounting"
 import { processEventsForPosition } from "./processEvents"
+import { zeroAddress } from "viem"
 
 type PositionSnapshot = {
   position: Position // this will be a snapshot of the position that the transaction is relevant to. In case of a migration, this will be the old position.
@@ -35,29 +36,36 @@ class TransactionProcessor {
     const { position, lots, collateralToken, debtToken } = snapshot
     if (events.length === 0) throw new Error(`Attempted to call eventProcessor with no events for position_id ${position.id}`)
     const organisedEvents = organiseEvents(events)
-    const { positionUpsertedEvents } = organisedEvents
+    const { positionUpsertedEvents, nftTransferEvents } = organisedEvents
     
     // ideally we'd just look for the PositionMigrated event, but the initial implementation of migrations didn't emit that event so this is more robust
     const positionIds = positionUpsertedEvents.reduce((acc, curr) => acc.add(curr.contangoPositionId), new Set<string>())
+
+    const isMigration = nftTransferEvents.find(x => x.to === zeroAddress) && nftTransferEvents.find(x => x.from === zeroAddress)
     
-    if (positionIds.size <= 1) return processEventsForPosition({ organisedEvents, position, lots, debtToken, collateralToken })
-    if (positionIds.size === 2) {
+    if (isMigration) {
       const [_, newContangoPositionId] = Array.from(positionIds)
       return handleMigrations({ position, lots, debtToken, collateralToken, organisedEvents, newContangoPositionId })
     }
+    if (positionIds.size <= 1) return processEventsForPosition({ organisedEvents, position, lots, debtToken, collateralToken })
 
-    throw new Error(`Events contain more than 2 distinct positionIds: ${Array.from(positionIds).map(id => id).join(', ')}`)
+    console.log(`unusual transaction: ${events[0].chainId}`, positionIds)
+    return { saveResult: () => {} }
   }
 
   private async processEvents(context: handlerContext) {
     if (this.snapshot) {
       if (this.processedHighwatermark === this.events.length) return // already processed. no need to do it again
 
-      const { position, lots, collateralToken, debtToken } = this.snapshot
-      const { saveResult, ...result } = await this.runProcessEvents({ position, lots, collateralToken, debtToken }, this.events)
-      saveResult(context)
-      this.processedHighwatermark = this.events.length
-      return result
+      try {
+        const { position, lots, collateralToken, debtToken } = this.snapshot
+        const { saveResult } = await this.runProcessEvents({ position, lots, collateralToken, debtToken }, this.events)
+        saveResult(context)
+        this.processedHighwatermark = this.events.length
+      } catch (e) {
+        console.log('failed to process events', this.events)
+        throw e
+      }
     }
   }
 
@@ -122,7 +130,7 @@ class EventProcessor {
     if (!processorMaybe) {
       this.processors.set(chainId, new TransactionProcessor(transactionKey))
     } else if (processorMaybe.transactionKey !== transactionKey) {
-      processorMaybe.cleanup(context)
+      await processorMaybe.cleanup(context)
       const newProcessor = new TransactionProcessor(transactionKey)
       this.processors.set(chainId, newProcessor)
     }

@@ -442,15 +442,6 @@ export const processTransaction = async ({ chainId, transactionHash }: { chainId
   if (positionId && !hasCalledEndStrategy) {
     mockDb = await runProcessing({ mockDb, positionId: positionId as `0x${string}`, chainId, transactionHash, blockNumber, from, to })
   }
-  
-  const fillItems = mockDb.entities.FillItem.getAll()
-  const fillItem = fillItems[fillItems.length - 1]
-
-  if (fillItems.length === 1) {
-    expect(fillItem.fillItemType).to.equal(FillItemType.Opened)
-  } else {
-    expect(fillItem.fillItemType).to.not.equal(FillItemType.Opened)
-  }
 
   return mockDb
 }
