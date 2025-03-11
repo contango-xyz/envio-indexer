@@ -1,6 +1,7 @@
-import { FillItem, Lot, Position, handlerContext } from "generated/src/Types.gen";
+import { FillItem, Lot, Position, TVL, Token, handlerContext } from "generated/src/Types.gen";
 import { createIdForLot } from "../../utils/ids";
 import { ReferencePriceSource } from "./prices";
+import { max } from "../../utils/math-helpers";
 
 export const saveFillItem = (fillItem: FillItem, context: handlerContext) => {
   if (fillItem.referencePriceSource === ReferencePriceSource.None && fillItem.cashflow !== 0n) {
@@ -46,3 +47,15 @@ export const loadLots = async ({ position, context }: { position: Position; cont
 
 };
 
+export const updateTvl = async ({ position, quoteToken, newCashflowQuote, oldCashflowQuote, context }: { quoteToken: Token; position: Position; newCashflowQuote: bigint; oldCashflowQuote: bigint; context: handlerContext }) => {
+  const delta = max(newCashflowQuote, 0n) - max(oldCashflowQuote, 0n)
+  const id = `${position.chainId}_${quoteToken.address}`
+  const tvl = await context.TVL.get(id)
+  const entry: TVL = {
+    id,
+    chainId: position.chainId,
+    token_id: quoteToken.id,
+    tvl: (tvl?.tvl || 0n) + delta,
+  }
+  context.TVL.set(entry)
+}

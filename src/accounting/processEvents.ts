@@ -2,7 +2,7 @@ import { FillItem, handlerContext, Lot, Position, Token } from "generated";
 import { createFillItemId } from "../utils/ids";
 import { eventsToPartialFillItem } from "./helpers";
 import { OrganisedEvents } from "./helpers/eventStore";
-import { saveFillItem, savePosition } from "./helpers/saveAndLoad";
+import { saveFillItem, savePosition, updateTvl } from "./helpers/saveAndLoad";
 import { updateLots } from "./lotsAccounting";
 
 export const processEventsForPosition = async (
@@ -84,6 +84,7 @@ export const processEventsForPosition = async (
   const saveResult = (context: handlerContext) => {
     saveFillItem(fillItem, context)
     savePosition({ ...result, context })
+    updateTvl({ position: newPosition, quoteToken: collateralToken, newCashflowQuote: newPosition.cashflowQuote, oldCashflowQuote: positionSnapshot.cashflowQuote, context })
   }
 
   // return the new position, fillItem, and lots
