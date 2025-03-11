@@ -84,7 +84,7 @@ export const processEventsForPosition = async (
   const saveResult = (context: handlerContext) => {
     saveFillItem(fillItem, context)
     savePosition({ ...result, context })
-    updateTvl({ position: newPosition, quoteToken: collateralToken, newCashflowQuote: newPosition.cashflowQuote, oldCashflowQuote: positionSnapshot.cashflowQuote, context })
+    updateTvl({ position: newPosition, quoteToken: debtToken, newCashflowQuote: newPosition.cashflowQuote, oldCashflowQuote: positionSnapshot.cashflowQuote, context })
   }
 
   // return the new position, fillItem, and lots
