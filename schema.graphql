@@ -257,6 +257,23 @@ type ContangoPositionMigratedEvent {
   newContangoPositionId: String!
 }
 
+type BeginStrategyEvent {
+  id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.BEGIN_STRATEGY}`
+  chainId: Int!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+}
+
+type EndStrategyEvent {
+  id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.END_STRATEGY}`
+  chainId: Int!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  transactionHash: String!
+  contangoPositionId: String!
+}
+
 type ContangoLiquidationEvent {
   id: ID! # `${createEventId({ chainId, transactionHash, logIndex })}_${ContangoEventType.LIQUIDATION}`
   blockNumber: Int!
@@ -268,6 +285,7 @@ type ContangoLiquidationEvent {
   debtDelta: BigInt!
   lendingProfitToSettle: BigInt!
   debtCostToSettle: BigInt!
+  cashflowInDebtToken: BigInt!
 }
 
 type ContangoInstrumentCreatedEvent {

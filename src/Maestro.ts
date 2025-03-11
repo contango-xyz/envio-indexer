@@ -1,13 +1,12 @@
-import { ContangoFeeCollectedEvent, Maestro } from "generated";
+import { Maestro } from "generated";
 import { getContract } from "viem";
-import { eventStore } from "./Store";
 import { maestroAbi } from "./abis";
-import { eventsReducer } from "./accounting/processEvents";
+import { eventProcessor } from "./accounting/processTransactions";
 import { clients } from "./clients";
 import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
 import { getOrCreateToken } from "./utils/getTokenDetails";
-import { createEventId, createStoreKeyFromEvent } from "./utils/ids";
-import { EventType } from "./utils/types";
+import { createEventId } from "./utils/ids";
+import { EventType, FeeCollectedEvent } from "./utils/types";
 
 Maestro.Upgraded.contractRegister(async ({ event, context }) => {
   if (event.block.number >= getIMoneyMarketEventsStartBlock(event.chainId)) {
@@ -19,11 +18,9 @@ Maestro.Upgraded.contractRegister(async ({ event, context }) => {
 })
 
 Maestro.FeeCollected.handler(async ({ event, context }) => {
-  const storeKey = createStoreKeyFromEvent(event)
-  const snapshot = await eventStore.getCurrentPositionSnapshot({ storeKey, positionId: event.params.positionId, context })
   const token = await getOrCreateToken({ chainId: event.chainId, address: event.params.token, context })
   const eventId = createEventId({ ...event, eventType: EventType.FEE_COLLECTED })
-  const entity: ContangoFeeCollectedEvent = {
+  const entity: FeeCollectedEvent = {
     id: eventId,
     chainId: event.chainId,
     contangoPositionId: event.params.positionId,
@@ -35,13 +32,8 @@ Maestro.FeeCollected.handler(async ({ event, context }) => {
     blockNumber: event.block.number,
     blockTimestamp: event.block.timestamp,
     transactionHash: event.transaction.hash,
+    eventType: EventType.FEE_COLLECTED,
   }
 
-  context.ContangoFeeCollectedEvent.set(entity)
-  eventStore.addLog({ ...entity, eventType: EventType.FEE_COLLECTED })
-
-  if (snapshot) {
-    // we consider the fee event to be the last event in the tx
-    await eventsReducer({ ...snapshot, context })
-  }
+  await eventProcessor.processEvent(entity, context)
 })

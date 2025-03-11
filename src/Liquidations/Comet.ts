@@ -1,47 +1,43 @@
-import {
-  CometLiquidations,
-  ContangoLiquidationEvent
-} from "generated";
-import { eventsReducer } from "../accounting/processEvents";
-import { eventStore } from "../Store";
-import { getBalancesAtBlock, getInterestToSettleOnLiquidation } from "../utils/common";
-import { createEventId, createStoreKeyFromEvent } from "../utils/ids";
-import { EventType } from "../utils/types";
-import { getPositionIdForProxyAddress } from "./common";
+import { CometLiquidations } from "generated";
+import { eventProcessor } from "../accounting/processTransactions";
+import { getBalancesAtBlock, getERC20Balance, getInterestToSettleOnLiquidation } from "../utils/common";
+import { createEventId } from "../utils/ids";
+import { EventType, LiquidationEvent } from "../utils/types";
+import { erc20Abi, getContract } from "viem";
 
 CometLiquidations.AbsorbCollateral.handler(async ({ event, context }) => {
-  const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.borrower, context })
+  const snapshot = await eventProcessor.getOrLoadSnapshotFromProxyAddress(event, event.params.borrower, context)
+  if (!snapshot) return
+  const { position } = snapshot
+  const { contangoPositionId } = position
   
-  if (positionId) {
-    const storeKey = createStoreKeyFromEvent(event)
-    const snapshot = await eventStore.getCurrentPositionSnapshot({ storeKey, positionId, context })
-    if (!snapshot) {
-      console.error(`no snapshot found for positionId: ${positionId} - chainId: ${event.chainId}`, event)
-      return
-    }
-    const { position } = snapshot
-    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
-    const { debt: debtAfter, collateral: collateralAfter } = await getBalancesAtBlock(event.chainId, position.contangoPositionId, event.block.number)
-    const debtDelta = debtAfter - position.debt
-    const collateralDelta = collateralAfter - position.collateral
+  const { lendingProfitToSettle, debtCostToSettle, collateralBefore, debtBefore } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
+  const { debt: debtAfter, collateral: collateralAfter } = await getBalancesAtBlock(event.chainId, position.contangoPositionId, event.block.number)
+  const debtDelta = debtAfter - debtBefore
+  const collateralDelta = collateralAfter - collateralBefore
+  
+  let cashflowInDebtToken = 0n
 
-    const liquidationEvent: ContangoLiquidationEvent = {
-      id: createEventId({ ...event, eventType: EventType.LIQUIDATION }),
-      chainId: event.chainId,
-      contangoPositionId: positionId,
-      collateralDelta,
-      debtDelta,
-      blockNumber: event.block.number,
-      blockTimestamp: event.block.timestamp,
-      transactionHash: event.transaction.hash,
-      lendingProfitToSettle,
-      debtCostToSettle,
-    }
-    
-    context.ContangoLiquidationEvent.set(liquidationEvent)
-    eventStore.addLog({ ...liquidationEvent, eventType: EventType.LIQUIDATION })
-
-    await eventsReducer({ ...snapshot, context })
+  if ((collateralDelta + position.collateral + position.accruedLendingProfit) === 0n) {
+    const proxyBalance = await getERC20Balance({ chainId: event.chainId, tokenAddress: event.srcAddress, blockNumber: event.block.number, address: event.params.borrower })
+    cashflowInDebtToken -= proxyBalance
   }
+
+  const liquidationEvent: LiquidationEvent = {
+    id: createEventId({ ...event, eventType: EventType.LIQUIDATION }),
+    chainId: event.chainId,
+    contangoPositionId,
+    collateralDelta,
+    debtDelta,
+    blockNumber: event.block.number,
+    blockTimestamp: event.block.timestamp,
+    transactionHash: event.transaction.hash,
+    lendingProfitToSettle,
+    debtCostToSettle,
+    cashflowInDebtToken,
+    eventType: EventType.LIQUIDATION,
+  }
+
+  await eventProcessor.processEvent(liquidationEvent, context)
 
 }, { wildcard: true });

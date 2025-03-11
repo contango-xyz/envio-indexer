@@ -1,5 +1,5 @@
 import { Instrument, Position, Token, handlerContext } from "generated";
-import { Hex, getContract, parseAbi } from "viem";
+import { Hex, getContract, parseAbi, erc20Abi } from "viem";
 import { contangoAbi, iAaveOracleAbi, iContangoLensAbi, iPoolAddressesProviderAbi } from "../abis";
 import { clients } from "../clients";
 import { Cache, CacheCategory } from "./cache";
@@ -10,6 +10,7 @@ import { ReturnPromiseType } from "./types";
 import { positionIdMapper } from "./mappers";
 import { arbitrum, avalanche, base, bsc, gnosis, mainnet, optimism, polygon, scroll } from "viem/chains";
 import { ADDRESSES } from "./constants";
+import { singletonPromise } from "./promise";
 
 export const lensAbi = parseAbi([
   "struct Balances { uint256 collateral; uint256 debt; }",
@@ -53,7 +54,19 @@ export const getInterestToSettleOnLiquidation = async ({ chainId, blockNumber, p
   const lendingProfitToSettle = max(collateralBefore - position.collateral, 0n)
   const debtCostToSettle = max(debtBefore - position.debt, 0n)
 
-  return { lendingProfitToSettle, debtCostToSettle }
+  return { lendingProfitToSettle, debtCostToSettle, collateralBefore, debtBefore }
+}
+
+export const getERC20Balance = async ({ chainId, tokenAddress, blockNumber, address }: { address: string; chainId: number; tokenAddress: string; blockNumber: number }) => {
+  const cached = await Cache.init({ category: CacheCategory.ERC20Balance, chainId })
+  const id = `${address}-${blockNumber}`
+  const balance = cached.read(id)
+  if (balance) return balance
+
+  const contract = getContract({ abi: erc20Abi, address: tokenAddress as Hex, client: clients[chainId] })
+  const balanceFromChain = await contract.read.balanceOf([address as Hex], { blockNumber: BigInt(blockNumber) })
+  cached.add({ [id]: balanceFromChain })
+  return balanceFromChain
 }
 
 export const createInstrumentId = ({ chainId, instrumentId }: { chainId: number; instrumentId: string; }) => `${chainId}_${instrumentId.slice(0, 34)}`
@@ -139,11 +152,14 @@ export const getMarkPrice = async ({ chainId, positionId, blockNumber, debtToken
     console.error(e)
     return 0n
   }
-
 }
 
-const getInstrument = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext; }) => {
-  const instrumentId = positionId.slice(0, 34) as Hex
+export const getMarkPriceSingleton = async (params: Parameters<typeof getMarkPrice>[0]) => {
+  return singletonPromise(`getMarkPrice-${params.positionId}-${params.blockNumber}`, () => getMarkPrice(params))
+}
+
+const getInstrument = async ({ chainId, contangoPositionId, context }: { chainId: number; contangoPositionId: string; context: handlerContext; }) => {
+  const instrumentId = contangoPositionId.slice(0, 34) as Hex
   const cached = await Cache.init({ category: CacheCategory.Instrument, chainId })
   const instrument = cached.read(instrumentId)
   if (instrument) return instrument
@@ -174,20 +190,20 @@ const getInstrument = async ({ chainId, positionId, context }: { chainId: number
   return entity
 }
 
-export const getOrCreateInstrument = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext }) => {
-  const storedInstrument = await context.Instrument.get(createInstrumentId({ chainId, instrumentId: positionId }))
+export const getOrCreateInstrument = async ({ chainId, contangoPositionId, context }: { chainId: number; contangoPositionId: string; context: handlerContext }) => {
+  const storedInstrument = await context.Instrument.get(createInstrumentId({ chainId, instrumentId: contangoPositionId }))
   if (storedInstrument) return storedInstrument
 
-  const instrument = await getInstrument({ chainId, positionId, context })
+  const instrument = await getInstrument({ chainId, contangoPositionId, context })
   context.Instrument.set(instrument)
 
   return instrument
 }
 
 export const getPairForPositionId = async (
-  { positionId, context, chainId }: { chainId: number; positionId: string; context: handlerContext }
+  { contangoPositionId, context, chainId }: { chainId: number; contangoPositionId: string; context: handlerContext }
 ): Promise<{ collateralToken: Token; debtToken: Token; instrument: Instrument }> => {
-  const instrument = await getOrCreateInstrument({ chainId, positionId, context })
+  const instrument = await getOrCreateInstrument({ chainId, contangoPositionId, context })
 
   try {
     const [collateralToken, debtToken] = await Promise.all([
@@ -195,27 +211,27 @@ export const getPairForPositionId = async (
       getOrCreateToken({ ...decodeTokenId(instrument.debtToken_id), context }),
     ])
   
-    if (!collateralToken) throw new Error(`Token not found for ${instrument.collateralToken_id} positionId: ${positionId}`)
-    if (!debtToken) throw new Error(`Token not found for ${instrument.debtToken_id} positionId: ${positionId}`)
+    if (!collateralToken) throw new Error(`Token not found for ${instrument.collateralToken_id} positionId: ${contangoPositionId}`)
+    if (!debtToken) throw new Error(`Token not found for ${instrument.debtToken_id} positionId: ${contangoPositionId}`)
   
     return { collateralToken, debtToken, instrument }
   } catch (e) {
-    context.log.error(`Error getting pair for positionId: ${positionId} - instrument: ${instrument.id} ${instrument.collateralToken_id} ${instrument.debtToken_id}`)
+    context.log.error(`Error getting pair for positionId: ${contangoPositionId} - instrument: ${instrument.id} ${instrument.collateralToken_id} ${instrument.debtToken_id}`)
     throw e
   }
 }
 
 
-export const getPosition = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext }) => {
-  const position = await context.Position.get(createIdForPosition({ chainId, positionId }))
-  if (!position) throw new Error(`Position not found for ${createIdForPosition({ chainId, positionId })}`)
+export const getPosition = async ({ chainId, contangoPositionId, context }: { chainId: number; contangoPositionId: string; context: handlerContext }) => {
+  const position = await context.Position.get(createIdForPosition({ chainId, contangoPositionId }))
+  if (!position) throw new Error(`Position not found for ${createIdForPosition({ chainId, contangoPositionId })}`)
   return { ...position }
 }
 
 
 export const getPositionSafe = async ({ chainId, positionId, context }: { chainId: number; positionId: string; context: handlerContext }) => {
   try {
-    return await getPosition({ chainId, positionId, context })
+    return await getPosition({ chainId, contangoPositionId: positionId, context })
   } catch {
     return null
   }

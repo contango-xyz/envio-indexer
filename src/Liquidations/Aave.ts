@@ -6,17 +6,15 @@ import {
   ContangoLiquidationEvent,
   handlerContext
 } from "generated";
-import { getContract, Hex, parseAbi } from "viem";
+import { Hex, getContract, parseAbi } from "viem";
 import { GenericEvent } from "../accounting/lotsAccounting";
-import { eventsReducer } from "../accounting/processEvents";
+import { eventProcessor } from "../accounting/processTransactions";
 import { clients } from "../clients";
-import { eventStore } from "../Store";
 import { getInterestToSettleOnLiquidation } from "../utils/common";
-import { createEventId, createStoreKeyFromEvent } from "../utils/ids";
+import { createEventId } from "../utils/ids";
 import { positionIdMapper } from "../utils/mappers";
 import { mulDiv } from "../utils/math-helpers";
-import { EventType } from "../utils/types";
-import { getPositionIdForProxyAddress } from "./common";
+import { EventType, LiquidationEvent } from "../utils/types";
 
 // Aave
 export function getLiquidationBonus(data: bigint): bigint {
@@ -50,8 +48,8 @@ const aaveAbi = parseAbi([
 ])
 
 export const processAaveLiquidationEvents = async (
-{ event, chainId, positionId, collateralAsset, liquidationContractAddress, blockNumber, liquidatedCollateralAmount, debtToCover, isV3 }: { event: GenericEvent; chainId: number; positionId: Hex; collateralAsset: Hex; liquidationContractAddress: Hex; blockNumber: bigint; liquidatedCollateralAmount: bigint; debtToCover: bigint; isV3: boolean; },
-): Promise<Omit<ContangoLiquidationEvent, 'liquidationPenalty' | 'markPrice' | 'eventType' | 'debtCostToSettle' | 'lendingProfitToSettle' | 'blockTimestamp' | 'transactionHash'>> => {
+{ event, chainId, positionId, collateralAsset, liquidationContractAddress, blockNumber, liquidatedCollateralAmount, debtToCover, isV3 }: { event: GenericEvent; chainId: number; positionId: string; collateralAsset: Hex; liquidationContractAddress: Hex; blockNumber: bigint; liquidatedCollateralAmount: bigint; debtToCover: bigint; isV3: boolean; },
+): Promise<Omit<ContangoLiquidationEvent, 'cashflowInDebtToken' | 'liquidationPenalty' | 'markPrice' | 'eventType' | 'debtCostToSettle' | 'lendingProfitToSettle' | 'blockTimestamp' | 'transactionHash'>> => {
   const client = clients[chainId]
 
   const pool = getContract({ abi: aaveAbi, address: liquidationContractAddress as Hex, client })
@@ -85,50 +83,43 @@ export const processAaveLiquidationEvents = async (
 
 const isV3 = (mm: number) => ![10, 9, 11, 15].includes(mm)
 
-type LiquidationEvent = AaveLiquidations_LiquidateAave_event | AaveLiquidations_LiquidateAgave_event | AaveLiquidations_LiquidateRadiant_event
+type AaveLiquidationEvent = AaveLiquidations_LiquidateAave_event | AaveLiquidations_LiquidateAgave_event | AaveLiquidations_LiquidateRadiant_event
 
-const processAndSaveLiquidation = async (event: LiquidationEvent, collateralAsset: string, context: handlerContext) => {
-  const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.user, context })
-  if (positionId) {
-    const storeKey = createStoreKeyFromEvent(event)
-    const snapshot = await eventStore.getCurrentPositionSnapshot({ storeKey, positionId, context })
-    if (!snapshot) {
-      console.error(`no snapshot found for positionId: ${positionId} - chainId: ${event.chainId}`, event)
-      return
-    }
-    const { position } = snapshot
-    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
+const processAndSaveLiquidation = async (event: AaveLiquidationEvent, collateralAsset: string, context: handlerContext) => {
+  const snapshot = await eventProcessor.getOrLoadSnapshotFromProxyAddress(event, event.params.user, context)
+  if (!snapshot) return
+  const { position } = snapshot
+  const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
 
-    const aaveLiquidationEvent = await processAaveLiquidationEvents({
-      chainId: event.chainId,
-      positionId,
-      collateralAsset: collateralAsset as Hex,
-      liquidationContractAddress: event.srcAddress as Hex,
-      blockNumber: BigInt(event.block.number),
-      liquidatedCollateralAmount: event.params.liquidatedCollateralAmount,
-      debtToCover: event.params.debtToCover,
-      isV3: isV3(positionIdMapper(positionId).mm),
-      event,
-    })
+  const aaveLiquidationEvent = await processAaveLiquidationEvents({
+    chainId: event.chainId,
+    positionId: position.contangoPositionId,
+    collateralAsset: collateralAsset as Hex,
+    liquidationContractAddress: event.srcAddress as Hex,
+    blockNumber: BigInt(event.block.number),
+    liquidatedCollateralAmount: event.params.liquidatedCollateralAmount,
+    debtToCover: event.params.debtToCover,
+    isV3: isV3(positionIdMapper(position.contangoPositionId).mm),
+    event,
+  })
 
-    try {
-  
-      const liquidationEvent: ContangoLiquidationEvent = {
-        ...aaveLiquidationEvent,
-        lendingProfitToSettle,
-        blockTimestamp: event.block.timestamp,
-        debtCostToSettle,
-        transactionHash: event.transaction.hash,
-      }
-      context.ContangoLiquidationEvent.set(liquidationEvent)
-      eventStore.addLog({ ...liquidationEvent, eventType: EventType.LIQUIDATION })
-  
-      await eventsReducer({ ...snapshot, context })
-    } catch (e) {
-      console.error(e)
-      context.log.debug(`Error processing liquidation for positionId: ${positionId} lendingProfitToSettle: ${lendingProfitToSettle} debtCostToSettle: ${debtCostToSettle}`)
+  try {
+
+    const liquidationEvent: LiquidationEvent = {
+      ...aaveLiquidationEvent,
+      lendingProfitToSettle,
+      blockTimestamp: event.block.timestamp,
+      debtCostToSettle,
+      transactionHash: event.transaction.hash,
+      cashflowInDebtToken: 0n,
+      eventType: EventType.LIQUIDATION,
     }
 
+    await eventProcessor.processEvent(liquidationEvent, context)
+
+  } catch (e) {
+    console.error(e)
+    context.log.debug(`Error processing liquidation for positionId: ${position.contangoPositionId} lendingProfitToSettle: ${lendingProfitToSettle} debtCostToSettle: ${debtCostToSettle}`)
   }
 }
 

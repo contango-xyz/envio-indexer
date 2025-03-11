@@ -1,6 +1,6 @@
 import { Token } from "generated";
 import { FeeCollectedEvent, PositionUpsertedEvent } from "../../utils/types";
-import { CashflowCurrency } from "../legacy";
+import { CashflowCurrency } from "../../utils/types";
 import { PriceConverters } from "./prices";
 
 export const withFees = ({ converters, feeEvents, positionUpsertedEvents, collateralToken, debtToken }: { converters: PriceConverters; feeEvents: FeeCollectedEvent[]; positionUpsertedEvents: PositionUpsertedEvent[]; collateralToken: Token; debtToken: Token }) => {

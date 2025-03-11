@@ -6,3 +6,9 @@ export const recordEntries: RecordEntries = Object.entries
 
 type RecordFromEntries = <K extends string | number, T>(input: (readonly [K, T] | [K, T])[]) => Record<K, T>
 export const recordFromEntries: RecordFromEntries = Object.fromEntries
+
+export const mapRecord = <K extends string | number, T, TT>(
+  data: Record<K, T>,
+  mapper: (x: T, i: K, o: Record<K, T>) => TT,
+): Record<K, TT> => recordFromEntries(recordEntries(data).map(([k, v]) => [k, mapper(v, k, data)]))
+

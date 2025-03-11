@@ -5,17 +5,17 @@ import {
   UnderlyingPositionFactory,
   UnderlyingPositionFactory_UnderlyingPositionCreated
 } from "generated";
-import { getContract, Hex, toHex, zeroAddress } from "viem";
+import { Hex, getContract, toHex, zeroAddress } from "viem";
+import { contangoAbi } from "./abis";
 import { createPosition } from "./accounting/positions";
-import { eventStore } from "./Store";
+import { eventProcessor } from "./accounting/processTransactions";
+import { clients } from "./clients";
 import { createInstrumentId, getPosition, getPositionSafe } from "./utils/common";
+import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
 import { getOrCreateToken } from "./utils/getTokenDetails";
-import { createEventId, createStoreKeyFromEvent } from "./utils/ids";
+import { createEventId } from "./utils/ids";
 import { strategyContractsAddresses } from "./utils/previousContractAddresses";
 import { EventType, PositionUpsertedEvent } from "./utils/types";
-import { getIMoneyMarketEventsStartBlock } from "./utils/constants";
-import { contangoAbi } from "./abis";
-import { clients } from "./clients";
 
 // re-run indexing again again
 ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
@@ -29,10 +29,8 @@ ContangoProxy.PositionUpserted.handler(async ({ event, context }) => {
     transactionHash: event.transaction.hash,
     eventType: EventType.POSITION_UPSERTED,
   }
-  eventStore.addLog(contangoEvent)
 
-  const storeKey = createStoreKeyFromEvent(event)
-  await eventStore.getCurrentPositionSnapshot({ storeKey, positionId: event.params.positionId, context })
+  await eventProcessor.processEvent(contangoEvent, context)
 })
 
 // On create, the NFT transfer event is emitted before the UnderlyingPositionCreated event
@@ -42,7 +40,7 @@ PositionNFT.Transfer.handler(async ({ event, context }) => {
 
   if (event.srcAddress.toLowerCase() !== '0xc2462f03920d47fc5b9e2c5f0ba5d2ded058fd78') return; // bug in envio causing this handler to pick up some scam tsx for example on this tx hash: 0xc1d5865badca9ee1f7d787c1d69f42621dd10a6ac8affad2d8d3d89ce9393ae2
 
-  eventStore.addLog({
+  await eventProcessor.processEvent({
     ...event,
     eventType: EventType.TRANSFER_NFT,
     contangoPositionId: positionId,
@@ -53,7 +51,7 @@ PositionNFT.Transfer.handler(async ({ event, context }) => {
     id: createEventId({ ...event, eventType: EventType.TRANSFER_NFT }),
     from,
     to,
-  })
+  }, context)
 
   if (event.params.from !== zeroAddress) {
     // if the transfer is to the strategy builder, we don't update the owner.
@@ -73,7 +71,7 @@ PositionNFT.Transfer.handler(async ({ event, context }) => {
     }
   } else {
     // transfer from zero address means the NFT is being created, and hence a position is being created
-    await createPosition({ ...event, positionId, owner: to, proxyAddress: zeroAddress, context })
+    await createPosition({ ...event, contangoPositionId: positionId, owner: to, proxyAddress: zeroAddress, context })
   }
 });
 
@@ -82,7 +80,7 @@ export const createUnderlyingPositionId = ({ chainId, proxyAddress }: { chainId:
 UnderlyingPositionFactory.UnderlyingPositionCreated.handler(async ({ event, context }) => {
   if (!event.transaction.from) throw new Error('UnderlyingPositionCreated event has no from address')
   const proxyAddress = event.params.account.toLowerCase()
-  const position = await getPosition({ chainId: event.chainId, positionId: event.params.positionId, context })
+  const position = await getPosition({ chainId: event.chainId, contangoPositionId: event.params.positionId, context })
   context.Position.set({ ...position, proxyAddress })
 
   const underlyingPosition: UnderlyingPositionFactory_UnderlyingPositionCreated = {

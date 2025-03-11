@@ -1,13 +1,13 @@
-import fs from 'fs/promises'
-import { Lot, TestHelpers } from 'generated'
-import path from 'path'
-import { decodeEventLog, erc20Abi, getAbiItem, Hex, Log, parseAbi, toEventSelector } from 'viem'
-import { contangoAbi, iMoneyMarketAbi, liquidationsAbi, maestroAbi, positionNftAbi, simpleSpotExecutorAbi, spotExecutorAbi, strategyBuilderAbi, underlyingPositionFactoryAbi } from '../src/abis'
-import { clients } from '../src/clients'
-import { createIdForPosition, decodeIdForPosition, IdForPosition } from '../src/utils/ids'
-import { positionIdMapper } from '../src/utils/mappers'
-import { FillItemType } from '../src/utils/types'
 import { expect } from 'chai'
+import fs from 'fs/promises'
+import { TestHelpers } from 'generated'
+import path from 'path'
+import { Hex, Log, decodeEventLog, erc20Abi, getAbiItem, parseAbi, toEventSelector } from 'viem'
+import { contangoAbi, iMoneyMarketAbi, liquidationsAbi, maestroAbi, positionNftAbi, simpleSpotExecutorAbi, spotExecutorAbi, strategyBuilderAbi, underlyingPositionFactoryAbi } from '../src/abis'
+import { eventProcessor } from '../src/accounting/processTransactions'
+import { clients } from '../src/clients'
+import { IdForPosition, createStoreKey, decodeIdForPosition } from '../src/utils/ids'
+import { FillItemType } from '../src/utils/types'
 
 const {
   ContangoProxy,
@@ -48,6 +48,7 @@ const abiItems = {
   },
   'Strategy': {
     'StragegyExecuted': getAbiItem({ abi: strategyBuilderAbi, name: "StragegyExecuted" }),
+    'EndStrategy': getAbiItem({ abi: strategyBuilderAbi, name: "EndStrategy" }),
   },
   'IMoneyMarket': {
     'Withdrawn': getAbiItem({ abi: iMoneyMarketAbi, name: "Withdrawn" }),
@@ -211,15 +212,16 @@ const runProcessing = async ({ mockDb, positionId, chainId, transactionHash, blo
   })
 }
 
-export const getTransactionEvents = async (id: IdForPosition, transactionHash: string) => {
-  const { chainId } = decodeIdForPosition(id)
+export const getTransactionEvents = async ({ chainId, transactionHash }: { chainId: number; transactionHash: string }) => {
   const transactionLogs = await getTransactionLogs(chainId, transactionHash)
   return transactionLogs.logs.map(log => logToEvent({ log, from: transactionLogs.from, to: transactionLogs.to, chainId }))
 }
 
-export const processTransaction = async (id: IdForPosition, transactionHash: string, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
-  const { chainId, positionId } = decodeIdForPosition(id)
+export const processTransaction = async ({ chainId, transactionHash }: { chainId: number; transactionHash: string }, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
   const { logs, from, to } = await getTransactionLogs(chainId, transactionHash)
+
+  let positionId: string | null = null
+  let hasCalledEndStrategy = false
 
   for (const log of logs) {
     const event = logToEvent({ log, from, to, chainId })
@@ -255,6 +257,7 @@ export const processTransaction = async (id: IdForPosition, transactionHash: str
         break
       }
       case 'PositionUpserted': {
+        positionId = event.args.positionId
         mockDb = await ContangoProxy.PositionUpserted.processEvent({
           event: {
             ...event,
@@ -339,15 +342,14 @@ export const processTransaction = async (id: IdForPosition, transactionHash: str
         })
         break
       }
-      // the end strategy event is not needed because we always call it below anyways. doing this here would just double the processing time
-
-      // case 'EndStrategy': {
-      //   mockDb = await StrategyProxy.EndStrategy.processEvent({
-      //     event: { ...event, params: event.args },
-      //     mockDb
-      //   })
-      //   break
-      // }
+      case 'EndStrategy': {
+        hasCalledEndStrategy = true
+        mockDb = await StrategyProxy.EndStrategy.processEvent({
+          event: { ...event, params: event.args },
+          mockDb
+        })
+        break
+      }
       case 'AbsorbCollateral': {
         mockDb = await CometLiquidations.AbsorbCollateral.processEvent({
           event: { ...event, params: event.args },
@@ -431,13 +433,11 @@ export const processTransaction = async (id: IdForPosition, transactionHash: str
     }
   }
 
-  const { blockNumber } = logs[0]
-  if (positionId && blockNumber !== null) {
-    mockDb = await runProcessing({ mockDb, positionId, chainId, transactionHash, blockNumber: Number(blockNumber), from, to })
-  } else {
-    throw new Error('Position ID not found')
+  const blockNumber = Number(logs[0].blockNumber)
+  if (positionId && !hasCalledEndStrategy) {
+    mockDb = await runProcessing({ mockDb, positionId: positionId as `0x${string}`, chainId, transactionHash, blockNumber, from, to })
   }
-
+  
   const fillItems = mockDb.entities.FillItem.getAll()
   const fillItem = fillItems[fillItems.length - 1]
 
@@ -460,7 +460,7 @@ const getTransactionHashesCacheKey = (id: IdForPosition) => {
 }
 
 
-export const getTransactionHashes = async (id: IdForPosition) => {
+const _getTransactionHashes = async (id: IdForPosition) => {
   const cacheKey = getTransactionHashesCacheKey(id)
   const { chainId, positionId } = decodeIdForPosition(id)
 
@@ -489,21 +489,18 @@ export const getTransactionHashes = async (id: IdForPosition) => {
   }
 }
 
-export const processTransactions = async (id: IdForPosition, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
+export const getTransactionHashes = async (id: IdForPosition) => {
+  const { chainId } = decodeIdForPosition(id)
+  const txHashes = await _getTransactionHashes(id)
+  return txHashes.map(txHash => ({ chainId, transactionHash: txHash }))
+}
+
+export const processTransactionsForPosition = async (id: IdForPosition, mockDb: ReturnType<typeof MockDb.createMockDb>) => {
   const transactionHashes = await getTransactionHashes(id)
 
   for (let i = 0; i < transactionHashes.length; i++) {
-    mockDb = await processTransaction(id, transactionHashes[i], mockDb)
-    const fillItem = mockDb.entities.FillItem.getAll()[i]
-    const position = mockDb.entities.Position.get(fillItem.position_id)
+    mockDb = await processTransaction(transactionHashes[i], mockDb)
   }
 
   return mockDb
-}
-
-export const lotsAreTheSame = (lot1: Lot, lot2: Lot) => {
-  return lot1.id === lot2.id &&
-    lot1.size === lot2.size &&
-    lot1.openCost === lot2.openCost &&
-    lot1.closedAtBlock === lot2.closedAtBlock
 }

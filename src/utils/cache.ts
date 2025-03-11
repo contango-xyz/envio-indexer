@@ -11,22 +11,24 @@ export const CacheCategory = {
   TokenPair: "token-pair",
   Balances: "balances",
   MarkPrice: "mark-price",
+  ERC20Balance: "erc20-balance",
 } as const;
 
 export type CacheCategory = (typeof CacheCategory)[keyof typeof CacheCategory];
 
 type Address = string;
 type InstrumentId = string;
+type ProxyAddress = string; 
 
 type ShapeToken = Record<Address, Token>;
 type ShapeInstrument = Record<Address, ReturnPromiseType<handlerContext["Instrument"]["get"]>>;
 type ShapeTokenPair = Record<InstrumentId, { collateralToken: Token; debtToken: Token }>;
 type ShapeMarkPrice = Record<InstrumentId, bigint>;
-
+type ShapeERC20Balance = Record<Address, bigint>;
 // key: `${positionId}-${blockNumber}`
 type ShapeBalances = Record<string, Balances>;
 
-type Shape = ShapeToken | ShapeInstrument | ShapeTokenPair | ShapeBalances | ShapeMarkPrice;
+type Shape = ShapeToken | ShapeInstrument | ShapeTokenPair | ShapeBalances | ShapeMarkPrice | ShapeERC20Balance;
 
 export class Cache {
   // Store instances by key (category-chainId)
@@ -59,6 +61,8 @@ export class Cache {
           ? ShapeBalances
           : C extends "mark-price"
           ? ShapeMarkPrice
+          : C extends "erc20-balance"
+          ? ShapeERC20Balance
           : never
       >;
     }
@@ -74,6 +78,8 @@ export class Cache {
       ? ShapeBalances
       : C extends "mark-price"
       ? ShapeMarkPrice
+      : C extends "erc20-balance"
+      ? ShapeERC20Balance
       : never;
       
     const entry = new Entry<S>(key);

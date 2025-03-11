@@ -3,7 +3,7 @@ import { zeroAddress } from "viem";
 import { ADDRESSES, wrappedNativeMap } from "../../utils/constants";
 import { createTokenId } from "../../utils/getTokenDetails";
 import { absolute, mulDiv } from "../../utils/math-helpers";
-import { TransferEvent } from "../../utils/types";
+import { LiquidationEvent, TransferEvent } from "../../utils/types";
 import { PriceConverters, ReferencePrices } from "./prices";
 
 type Params = {
@@ -16,9 +16,10 @@ type Params = {
   fee_long: bigint
   fee_short: bigint
   converters: PriceConverters
+  liquidationEvents: LiquidationEvent[]
 }
 
-export const withCashflows = ({ owner, chainId, debtToken, collateralToken, transferEvents, prices, fee_long, fee_short, converters }: Params) => {
+export const withCashflows = ({ liquidationEvents, owner, chainId, debtToken, collateralToken, transferEvents, prices, fee_long, fee_short, converters }: Params) => {
   const cashflows = calculateNetCashflows(transferEvents)
   const { baseToQuote, quoteToBase } = converters
 
@@ -37,7 +38,7 @@ export const withCashflows = ({ owner, chainId, debtToken, collateralToken, tran
         if (addressMovingMoney === zeroAddress && wrappedNativeMap[chainId] === tokenAddress) return true
         return false
       })
-      .forEach(([addressMovingMoney, value]) => {
+      .forEach(([_, value]) => {
         if (value === 0n) return
         const cashflowQuoteBefore = cashflowQuote
         if (tokenAddress === collateralToken.address) {
@@ -83,6 +84,12 @@ export const withCashflows = ({ owner, chainId, debtToken, collateralToken, tran
     }
   }
 
+  if (liquidationEvents.length > 0) {
+    const [liquidationEvent] = liquidationEvents
+    cashflowQuote += liquidationEvent.cashflowInDebtToken
+    cashflowBase += quoteToBase(liquidationEvent.cashflowInDebtToken)
+  }
+
   return { cashflow, cashflowQuote, cashflowBase, cashflowToken_id }
 }
 
@@ -107,5 +114,4 @@ export const calculateNetCashflows = (events: TransferEvent[]): CashflowRecord =
         }
       }
     }, {} as CashflowRecord)
-
 }

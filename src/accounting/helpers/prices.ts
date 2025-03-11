@@ -1,10 +1,9 @@
 import { ContangoSwapEvent, Lot, Position, Token } from "generated";
-import { getMarkPrice } from "../../utils/common";
+import { getMarkPriceSingleton } from "../../utils/common";
 import { decodeTokenId } from "../../utils/getTokenDetails";
 import { absolute, mulDiv } from "../../utils/math-helpers";
-import { ContangoEvents, EventType, MigrationType, PositionUpsertedEvent, SwapEvent } from "../../utils/types";
-import { OrganisedEvents } from "../helpers";
-import { calculateDebtAndCollateral } from "./debtAndCollateral";
+import { ContangoEvents, PositionUpsertedEvent, SwapEvent } from "../../utils/types";
+import { OrganisedEvents } from "./eventStore";
 import { AccountingType } from "../lotsAccounting";
 
 export enum ReferencePriceSource {
@@ -93,7 +92,7 @@ const getReferencePrices = async (position: Position, debtToken: Token, collater
   if (result2.referencePriceSource === ReferencePriceSource.SwapPrice) return { ...result2, cashflowSwap: result1.cashflowSwap } // we may have gotten the cashflow swap event form the swap events
 
   const allEvents = Object.values(events).filter((event) => event !== null).flat() as ContangoEvents[]
-  const markPrice = await getMarkPrice({ chainId: position.chainId, positionId: position.contangoPositionId, blockNumber: allEvents[0].blockNumber, debtToken })
+  const markPrice = await getMarkPriceSingleton({ chainId: position.chainId, positionId: position.contangoPositionId, blockNumber: allEvents[0].blockNumber, debtToken })
   if (markPrice) {
     return {
       referencePrice_long: markPrice,

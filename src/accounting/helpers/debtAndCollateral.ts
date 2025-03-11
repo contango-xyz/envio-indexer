@@ -1,14 +1,12 @@
-import { Position, Token } from "generated"
-import { getLiquidationPenalty } from "../../Liquidations/common"
+import { Position } from "generated"
 import { max } from "../../utils/math-helpers"
-import { CollateralEvent, DebtEvent, FillItemType, LiquidationEvent, PositionUpsertedEvent } from "../../utils/types"
-import { CashflowCurrency } from "../legacy"
-import { PriceConverters, ReferencePrices } from "./prices"
-import { OrganisedEvents } from "../helpers"
+import { CashflowCurrency, CollateralEvent, DebtEvent, FillItemType, PositionUpsertedEvent } from "../../utils/types"
+import { OrganisedEvents } from "./eventStore"
+import { PriceConverters } from "./prices"
 
 const processDebtEvents = ({ position, debtEvents }: { position: Position; debtEvents: DebtEvent[] }) => {
   return debtEvents.reduce((acc, event) => {
-    const debtCostToSettle = max(event.balanceBefore - (position.debt + position.accruedDebtCost), 0n)
+    const debtCostToSettle = max(event.balanceBefore - position.debt, 0n)
     return { debtCostToSettle: acc.debtCostToSettle + debtCostToSettle, debtDelta: acc.debtDelta + event.debtDelta }
   }, { debtCostToSettle: 0n, debtDelta: 0n })
 }
@@ -66,12 +64,13 @@ const calculateCollateralValues = ({ position, collateralEvents, positionUpserte
 export const calculateDebtAndCollateral = ({ position, debtEvents, collateralEvents, positionUpsertedEvents, converters, liquidationEvents }: OrganisedEvents & { position: Position; converters: PriceConverters }) => {
   if (liquidationEvents.length > 0) {
     const [{ collateralDelta, debtDelta, lendingProfitToSettle, debtCostToSettle }] = liquidationEvents
+    const isFullyLiquidated = position.collateral + position.accruedLendingProfit + collateralDelta <= 0n
     return {
       collateralDelta,
       debtDelta,
-      lendingProfitToSettle: 0n, // still puzzled as to why the tests pass perfectly with this value
-      debtCostToSettle: 0n, // same here
-      fillItemType: FillItemType.Liquidated,
+      lendingProfitToSettle, // still puzzled as to why the tests pass perfectly with this value
+      debtCostToSettle, // same here
+      fillItemType: isFullyLiquidated ? FillItemType.LiquidatedFully : FillItemType.Liquidated,
     }
   }
 

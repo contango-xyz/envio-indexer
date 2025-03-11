@@ -1,9 +1,9 @@
-import { ContangoSwapEvent, SimpleSpotExecutor, SpotExecutor } from "generated";
-import { eventStore } from "./Store";
+import { SimpleSpotExecutor, SpotExecutor } from "generated";
+import { eventProcessor } from "./accounting/processTransactions";
 import { getOrCreateToken } from "./utils/getTokenDetails";
 import { createEventId } from "./utils/ids";
 import { absolute } from "./utils/math-helpers";
-import { EventType } from "./utils/types";
+import { EventType, SwapEvent } from "./utils/types";
 
 SpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
   const [tokenIn, tokenOut] = await Promise.all([
@@ -13,7 +13,7 @@ SpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
 
   const { chainId, block: { timestamp: blockTimestamp, number: blockNumber }, transaction: { hash: transactionHash }, logIndex } = event
   const eventId = createEventId({ ...event, eventType: EventType.SWAP_EXECUTED })
-  const swapEvent: ContangoSwapEvent = {
+  const swapEvent: SwapEvent = {
     id: eventId,
     chainId,
     tokenIn_id: tokenIn.id,
@@ -23,10 +23,10 @@ SpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
     blockNumber,
     blockTimestamp,
     transactionHash,
+    eventType: EventType.SWAP_EXECUTED,
   }
 
-  context.ContangoSwapEvent.set(swapEvent)
-  eventStore.addLog({ ...swapEvent, eventType: EventType.SWAP_EXECUTED })
+  await eventProcessor.processEvent(swapEvent, context)
 })
 
 SimpleSpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
@@ -38,7 +38,7 @@ SimpleSpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
 
   const eventId = createEventId({ ...event, eventType: EventType.SWAP_EXECUTED })
 
-  const swapEvent: ContangoSwapEvent = {
+  const swapEvent: SwapEvent = {
     id: eventId,
     chainId: event.chainId,
     tokenIn_id: tokenIn.id,
@@ -48,8 +48,8 @@ SimpleSpotExecutor.SwapExecuted.handler(async ({ event, context }) => {
     blockNumber: event.block.number,
     blockTimestamp: event.block.timestamp,
     transactionHash: event.transaction.hash,
+    eventType: EventType.SWAP_EXECUTED,
   }
 
-  context.ContangoSwapEvent.set(swapEvent)
-  eventStore.addLog({ ...swapEvent, eventType: EventType.SWAP_EXECUTED })
+  await eventProcessor.processEvent(swapEvent, context)
 })

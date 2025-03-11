@@ -2,7 +2,7 @@ import { Hex } from "viem";
 import { AccountingType, GenericEvent } from "../accounting/lotsAccounting";
 import { ContangoEvents, EventType } from "./types";
 
-export const createIdForPosition = ({ chainId, positionId }: Pick<GenericEvent, 'chainId'> & { positionId: string; }): `${number}_${string}` => `${chainId}_${positionId.toLowerCase()}`
+export const createIdForPosition = ({ chainId, contangoPositionId }: Pick<GenericEvent, 'chainId'> & { contangoPositionId: string; }): `${number}_${string}` => `${chainId}_${contangoPositionId.toLowerCase()}`
 
 // important: this is not the same as `positionId` that we're used to. This is the ID of the entity in the database, and includes the chainId
 export type IdForPosition = ReturnType<typeof createIdForPosition>

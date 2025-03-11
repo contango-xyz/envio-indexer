@@ -1,9 +1,7 @@
 import { genericEvent } from "envio/src/Internal.gen";
-import { Lot, Position, handlerContext } from 'generated';
-import { createIdForLot } from "../utils/ids";
+import { Lot, Position } from 'generated';
 import { max, min, mulDiv } from "../utils/math-helpers";
 import { ContangoEvents, Mutable } from "../utils/types";
-import { PartialFillItem } from "./helpers";
 
 export enum AccountingType {
   Long = 'Long',
@@ -125,14 +123,6 @@ export const handleCostDelta = ({ lots, costDelta }: { lots: Mutable<Lot>[]; cos
   }
 
   return lots
-}
-
-export const loadLots = async ({ position, context }: { position: Position; context: handlerContext }) => {
-
-  return (await Promise.all(Array.from({ length: position.lotCount }, async (_, idx) => {
-    return context.Lot.get(createIdForLot({ chainId: position.chainId, positionId: position.contangoPositionId, index: idx }))
-  }))).filter((lot): lot is Lot => Boolean(lot))
-
 }
 
 export const allocateInterestToLots = async ({ lots, lendingProfitToSettle, debtCostToSettle }: { lots: Lot[]; lendingProfitToSettle: bigint; debtCostToSettle: bigint; }) => {

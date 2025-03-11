@@ -1,27 +1,19 @@
-import { ContangoLiquidationEvent, EulerLiquidations } from "generated";
-import { getContract, Hex, parseAbi } from "viem";
-import { eventsReducer } from "../accounting/processEvents";
+import { EulerLiquidations } from "generated";
+import { Hex, getContract, parseAbi } from "viem";
+import { eventProcessor } from "../accounting/processTransactions";
 import { clients } from "../clients";
-import { eventStore } from "../Store";
 import { getInterestToSettleOnLiquidation } from "../utils/common";
-import { createEventId, createStoreKeyFromEvent } from "../utils/ids";
-import { EventType } from "../utils/types";
-import { getPositionIdForProxyAddress } from "./common";
+import { createEventId } from "../utils/ids";
+import { EventType, LiquidationEvent } from "../utils/types";
 
 const eulerAbi = parseAbi(["function convertToAssets(uint256 shares) external view returns (uint256 assets)"])
 
 EulerLiquidations.LiquidateEuler.handler(async ({ event, context }) => {
-  const positionId = await getPositionIdForProxyAddress({ chainId: event.chainId, user: event.params.violator, context })
-
-  if (positionId) {
-    const storeKey = createStoreKeyFromEvent(event)
-    const snapshot = await eventStore.getCurrentPositionSnapshot({ storeKey, positionId, context })
-    if (!snapshot) {
-      console.error(`no snapshot found for positionId: ${positionId} - chainId: ${event.chainId}`, event)
-      return
-    }
-
+  const snapshot = await eventProcessor.getOrLoadSnapshotFromProxyAddress(event, event.params.violator, context)
+  
+  if (snapshot) {
     const { position } = snapshot
+    const { contangoPositionId } = position
 
     const collateralTaken = await getContract({
       abi: eulerAbi,
@@ -29,12 +21,12 @@ EulerLiquidations.LiquidateEuler.handler(async ({ event, context }) => {
       client: clients[event.chainId],
     }).read.convertToAssets([event.params.yieldBalance], { blockNumber: BigInt(event.block.number) })
 
-    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number - 1, position })
+    const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
     
-    const liquidationEvent: ContangoLiquidationEvent = {
+    const liquidationEvent: LiquidationEvent = {
       id: createEventId({ ...event, eventType: EventType.LIQUIDATION }),
       chainId: event.chainId,
-      contangoPositionId: positionId,
+      contangoPositionId,
       collateralDelta: -collateralTaken,
       debtDelta: -event.params.repayAssets,
       blockNumber: event.block.number,
@@ -42,10 +34,9 @@ EulerLiquidations.LiquidateEuler.handler(async ({ event, context }) => {
       transactionHash: event.transaction.hash,
       lendingProfitToSettle,
       debtCostToSettle,
+      cashflowInDebtToken: 0n,
+      eventType: EventType.LIQUIDATION,
     }
-    context.ContangoLiquidationEvent.set(liquidationEvent)
-    eventStore.addLog({ ...liquidationEvent, eventType: EventType.LIQUIDATION })
-
-    await eventsReducer({ ...snapshot, context })
+    await eventProcessor.processEvent(liquidationEvent, context)
   }
 }, { wildcard: true });

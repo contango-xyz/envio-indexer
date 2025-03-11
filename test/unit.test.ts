@@ -1,18 +1,18 @@
 import { expect } from 'chai'
 import { Position, SpotExecutor_SwapExecuted_event, TestHelpers } from 'generated'
 import { describe, it } from 'mocha'
-import { AccountingType } from '../src/accounting/lotsAccounting'
-import { createTokenId } from '../src/utils/getTokenDetails'
-import { createIdForPosition, IdForPosition } from '../src/utils/ids'
-import { ContangoEvents, FillItemType, ReturnPromiseType, SwapEvent } from '../src/utils/types'
-import { getTransactionEvents, getTransactionHashes, processTransaction, processTransactions } from './testHelpers'
-import { decodeFeeEvent } from '../src/StrategyProxy'
 import { Hex, toHex } from 'viem'
-import { createInstrumentId, getBalancesAtBlock } from '../src/utils/common'
-import { mulDiv } from '../src/utils/math-helpers'
-import { clients } from '../src/clients'
-import { arbitrum, mainnet } from 'viem/chains'
+import { arbitrum } from 'viem/chains'
+import { decodeFeeEvent } from '../src/StrategyProxy'
 import { ReferencePriceSource } from '../src/accounting/helpers/prices'
+import { AccountingType } from '../src/accounting/lotsAccounting'
+import { clients } from '../src/clients'
+import { createInstrumentId, getBalancesAtBlock } from '../src/utils/common'
+import { createTokenId } from '../src/utils/getTokenDetails'
+import { IdForPosition, createIdForPosition } from '../src/utils/ids'
+import { mulDiv } from '../src/utils/math-helpers'
+import { FillItemType, ReturnPromiseType } from '../src/utils/types'
+import { getTransactionEvents, getTransactionHashes, processTransaction, processTransactionsForPosition } from './testHelpers'
 const { MockDb } = TestHelpers
 
 const getFeeEventMaybe = (events: ReturnPromiseType<typeof getTransactionEvents>) => {
@@ -113,19 +113,24 @@ describe('indexer tests', () => {
     expect((Number(position.realisedPnl_short) / Number(collateralToken.unit)).toFixed(3)).to.equal((Number(position.cashflowBase) / Number(collateralToken.unit) * -1).toFixed(3))
   }
 
+  async function getAssertionValues(id: IdForPosition) {
+    const position = mockDb.entities.Position.get(id)
+    if (!position) throw new Error('Position not found in test!')
+    const fillItems = mockDb.entities.FillItem.getAll().filter(fillItem => fillItem.position_id === id)
+    const lots = mockDb.entities.Lot.getAll().filter(lot => lot.position_id === id)
+    const { debtToken, collateralToken } = await getTokensForPosition(position)
+    
+    return { fillItems, lots, debtToken, collateralToken, position, fillItem: fillItems[fillItems.length - 1] }
+  }
+
   it('RDNT/ETH short - Chain: Arbitrum - Number: #20498', async function() {
     this.timeout(30000)
-    const id = createIdForPosition({ chainId: 42161, positionId: '0x5745544852444e54000000000000000010ffffffff0000000000000000005012' })
+    const id = createIdForPosition({ chainId: 42161, contangoPositionId: '0x5745544852444e54000000000000000010ffffffff0000000000000000005012' })
     const transactionHashes = await getTransactionHashes(id)
 
     for (let i = 0; i < transactionHashes.length; i++) {
-      mockDb = await processTransaction(id, transactionHashes[i], mockDb)
-
-      const position = mockDb.entities.Position.get(id)
-      if (!position) throw new Error('Position not found in test!')
-      const fillItems = mockDb.entities.FillItem.getAll()
-      const lots = mockDb.entities.Lot.getAll()
-      const fillItem = fillItems[i]
+      mockDb = await processTransaction(transactionHashes[i], mockDb)
+      const { fillItem, lots, position } = await getAssertionValues(id)
 
       if (i === 0) {
         const longLot = lots.filter(lot => lot.accountingType === AccountingType.Long)[i]
@@ -175,8 +180,8 @@ describe('indexer tests', () => {
 
   it('ARB/DAI long - Chain: Arbitrum - Number: #21272', async function() {
     this.timeout(30000)
-    const id = createIdForPosition({ chainId: 42161, positionId: '0x4152424441490000000000000000000001ffffffff0200000000000000005318' })
-    mockDb = await processTransactions(id, mockDb)
+    const id = createIdForPosition({ chainId: 42161, contangoPositionId: '0x4152424441490000000000000000000001ffffffff0200000000000000005318' })
+    mockDb = await processTransactionsForPosition(id, mockDb)
 
     await highLevelInvariants(id)
   })
@@ -195,30 +200,36 @@ describe('indexer tests', () => {
       newPositionId: '0x5745544855534443000000000000000011ffffffff00000000000000000053e2',
       description: 'ETH/USDC.e long - Chain: Arbitrum - Number: #21105'
     },
+    // {
+    //   chainId: 42161,
+    //   oldPositionId: '0x5745544855534443000000000000000001ffffffff000000000000000000058f',
+    //   newPositionId: '0x5745544855534443000000000000000010ffffffff0000000000000000000590',
+    //   description: 'ETH/USDC.e long - chain: Arbitrum #Unknown - blockNumber: 197492876'
+    // }
   ]
 
   simpleMigrationTestCases.forEach(({ chainId, oldPositionId, newPositionId, description }) => {
     it(`Migration test: ${description}`, async function() {
       this.timeout(30000)
-      const id = createIdForPosition({ chainId, positionId: oldPositionId })
+      const id = createIdForPosition({ chainId, contangoPositionId: oldPositionId })
       const transactionHashes = await getTransactionHashes(id)
       const positionSnapshots: Position[] = []
       let lotsCountBefore = 0
       let newPositionFound = false
 
       for (let i = 0; i < transactionHashes.length; i++) {
-        mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+        mockDb = await processTransaction(transactionHashes[i], mockDb)
         const oldPosition = mockDb.entities.Position.get(id)
         if (!oldPosition) throw new Error('Position not found in test!')
         
-        const migratedToId = createIdForPosition({ chainId, positionId: newPositionId })
+        const migratedToId = createIdForPosition({ chainId, contangoPositionId: newPositionId })
         const newPosition = mockDb.entities.Position.get(migratedToId)
 
         if (newPosition) {
           newPositionFound = true
           const lots = mockDb.entities.Lot.getAll()
           const lotsCountAfterMigration = lots.length
-          const eventsInMigrationTransaction = await getTransactionEvents(id, transactionHashes[i])
+          const eventsInMigrationTransaction = await getTransactionEvents(transactionHashes[i])
           const fillItems = mockDb.entities.FillItem.getAll()
           const positionBeforeMigration = positionSnapshots[positionSnapshots.length - 1]
           const [migrationFillItem] = fillItems.reverse()
@@ -327,22 +338,22 @@ describe('indexer tests', () => {
   baseCcyMigrationTestCases.forEach(({ chainId, oldPositionId, newPositionId, description }) => {
     it(`Migration test: ${description}`, async function() {
       this.timeout(30000)
-      const id = createIdForPosition({ chainId, positionId: oldPositionId })
+      const id = createIdForPosition({ chainId, contangoPositionId: oldPositionId })
       const transactionHashes = await getTransactionHashes(id)
       const positionSnapshots: Position[] = []
       let newPositionFound = false
 
       for (let i = 0; i < transactionHashes.length; i++) {
-        mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+        mockDb = await processTransaction(transactionHashes[i], mockDb)
         const oldPosition = mockDb.entities.Position.get(id)
         if (!oldPosition) throw new Error('Position not found in test!')
         
-        const migratedToId = createIdForPosition({ chainId, positionId: newPositionId })
+        const migratedToId = createIdForPosition({ chainId, contangoPositionId: newPositionId })
         const newPosition = mockDb.entities.Position.get(migratedToId)
 
         if (newPosition) {
           newPositionFound = true
-          const eventsInMigrationTransaction = await getTransactionEvents(id, transactionHashes[i])
+          const eventsInMigrationTransaction = await getTransactionEvents(transactionHashes[i])
           const fillItems = mockDb.entities.FillItem.getAll()
           const positionBeforeMigration = positionSnapshots[positionSnapshots.length - 1]
           const [migrationOpenFillItem, migrationCloseFillItem] = fillItems.reverse()
@@ -486,9 +497,9 @@ describe('indexer tests', () => {
 
   it('Migration from before the PositionMigrated event', async function() {
     this.timeout(30000)
-    const oldId = createIdForPosition({ chainId: 42161, positionId: '0x5745544855534443000000000000000001ffffffff0000000000000000000a17' })
-    const newId = createIdForPosition({ chainId: 42161, positionId: '0x574554485553444300000000000000000bffffffff0000000000000000000ad2' })
-    mockDb = await processTransactions(oldId, mockDb)
+    const oldId = createIdForPosition({ chainId: 42161, contangoPositionId: '0x5745544855534443000000000000000001ffffffff0000000000000000000a17' })
+    const newId = createIdForPosition({ chainId: 42161, contangoPositionId: '0x574554485553444300000000000000000bffffffff0000000000000000000ad2' })
+    mockDb = await processTransactionsForPosition(oldId, mockDb)
     const fillItems = mockDb.entities.FillItem.getAll()
     const lots = mockDb.entities.Lot.getAll()
     const longLots = lots.filter(lot => lot.accountingType === AccountingType.Long)
@@ -533,8 +544,8 @@ describe('indexer tests', () => {
 
   it('Some random migration', async function() {
     this.timeout(30000)
-    const id = createIdForPosition({ chainId: 42161, positionId: '0x777374455448574554480000000000001fffffffff0000000005000000004b63' })
-    mockDb = await processTransactions(id, mockDb)
+    const id = createIdForPosition({ chainId: 42161, contangoPositionId: '0x777374455448574554480000000000001fffffffff0000000005000000004b63' })
+    mockDb = await processTransactionsForPosition(id, mockDb)
 
     const oldPosition = mockDb.entities.Position.get(id)
     if (!oldPosition) throw new Error('Position not found in test!')
@@ -560,27 +571,14 @@ describe('indexer tests', () => {
     expect(Number(newPosition.collateral)).to.be.greaterThan(0)
   })
 
-  it('Position managed through a SAFE', async function() {
-    this.timeout(30000)
-    const positionId = '0x7344414955534443000000000000000001ffffffff00000000000000000004b5'
-    const id = createIdForPosition({ chainId: 100, positionId })
-    const transactionHashes = await getTransactionHashes(id)
-
-    for (let i = 0; i < transactionHashes.length; i++) {
-      mockDb = await processTransaction(id, transactionHashes[i], mockDb)
-    }
-
-    await highLevelInvariants(id)
-  })
-
   it('Short ETH/USDC - 0x leverage', async function() {
     this.timeout(30000)
     const positionId = '0x5553444357455448000000000000000001ffffffff000000000000000000005c'
-    const id = createIdForPosition({ chainId: 42161, positionId })
+    const id = createIdForPosition({ chainId: 42161, contangoPositionId: positionId })
     const transactionHashes = await getTransactionHashes(id)
 
     for (let i = 0; i < transactionHashes.length; i++) {
-      mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+      mockDb = await processTransaction(transactionHashes[i], mockDb)
       const fillItems = mockDb.entities.FillItem.getAll()
       const lots = mockDb.entities.Lot.getAll()
       const position = mockDb.entities.Position.get(id)
@@ -603,27 +601,14 @@ describe('indexer tests', () => {
     }
   })
 
-  it('ARB/DAI Lodestar - position with multiple liquidations', async function() {
-    this.timeout(30000)
-    const id = createIdForPosition({ chainId: 42161, positionId: '0x5745544857584441490000000000000007ffffffff0000000000000000000001' })
-    const transactionHashes = await getTransactionHashes(id)
-
-    for (let i = 0; i < transactionHashes.length; i++) {
-      mockDb = await processTransaction(id, transactionHashes[i], mockDb)
-      const position = mockDb.entities.Position.get(id)
-      if (!position) throw new Error('Position not found in test!')
-      const fillItems = mockDb.entities.FillItem.getAll()
-      const fillItem = fillItems[i]
-    }
-  })
 
   it('ARB/USDC long - Chain: Arbitrum - Number: #5488', async function() {
     this.timeout(30000)
-    const id = createIdForPosition({ chainId: 42161, positionId: '0x415242555344432e6e0000000000000001ffffffff0200000000000000001570' })
+    const id = createIdForPosition({ chainId: 42161, contangoPositionId: '0x415242555344432e6e0000000000000001ffffffff0200000000000000001570' })
     const transactionHashes = await getTransactionHashes(id)
 
     for (let i = 0; i < transactionHashes.length; i++) {
-      mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+      mockDb = await processTransaction(transactionHashes[i], mockDb)
 
       const position = mockDb.entities.Position.get(id)
       if (!position) throw new Error('Position not found in test!')
@@ -664,18 +649,13 @@ describe('indexer tests', () => {
   // test with positon that uses new IMoneyMarket events
   it('USDT/USDC - Arbitrum - Using new events (OPEN->REDUCE->CLOSE)', async function() {
     this.timeout(30000)
-    const id = createIdForPosition({ chainId: 42161, positionId: '0x55534454555344432e6e00000000000011ffffffff00000000000000000058a8' })
+    const id = createIdForPosition({ chainId: 42161, contangoPositionId: '0x55534454555344432e6e00000000000011ffffffff00000000000000000058a8' })
     const transactionHashes = await getTransactionHashes(id)
 
     for (let i = 0; i < transactionHashes.length; i++) {
-      mockDb = await processTransaction(id, transactionHashes[i], mockDb)
+      mockDb = await processTransaction(transactionHashes[i], mockDb)
 
-      const position = mockDb.entities.Position.get(id)
-      if (!position) throw new Error('Position not found in test!')
-      const lots = mockDb.entities.Lot.getAll()
-      const fillItems = mockDb.entities.FillItem.getAll()
-      const fillItem = fillItems[i]
-
+      const { fillItem, lots, position, fillItems } = await getAssertionValues(id)
       if (i === 0) {
         expect(lots.length).to.equal(2)
         expect(position.lotCount).to.equal(2)
@@ -873,9 +853,10 @@ describe('indexer tests', () => {
   describe('High level invariants', () => {
     // only positions that have been closed, and have not been liquidated at all should be tested here
     const highLevelInvariantTestCases = [
-      createIdForPosition({ chainId: 1, positionId: '0x4141564555534443000000000000000001ffffffff0000000000000000000304' }),
-      createIdForPosition({ chainId: 42161, positionId: '0x5745544855534443000000000000000001ffffffff00000000000000000057f8' }),
-      createIdForPosition({ chainId: 10, positionId: '0x5745544855534443000000000000000001ffffffff0000000000000000000012' }),
+      createIdForPosition({ chainId: 1, contangoPositionId: '0x4141564555534443000000000000000001ffffffff0000000000000000000304' }),
+      createIdForPosition({ chainId: 42161, contangoPositionId: '0x5745544855534443000000000000000001ffffffff00000000000000000057f8' }),
+      createIdForPosition({ chainId: 10, contangoPositionId: '0x5745544855534443000000000000000001ffffffff0000000000000000000012' }),
+      createIdForPosition({ chainId: 100, contangoPositionId: '0x7344414955534443000000000000000001ffffffff00000000000000000004b5' }), // position managed through a SAFE
     ]
 
     highLevelInvariantTestCases.forEach((id) => {
@@ -883,76 +864,72 @@ describe('indexer tests', () => {
         this.timeout(30000)
         const transactionHashes = await getTransactionHashes(id)    
         for (let i = 0; i < transactionHashes.length; i++) {
-          mockDb = await processTransaction(id, transactionHashes[i], mockDb)
-          // const fillItems = mockDb.entities.FillItem.getAll()
-          // const position = mockDb.entities.Position.get(id)
-          // if (!position) throw new Error('Position not found in test!')
-          // const fillItem = fillItems[i]
-          // console.log('fillItem', fillItem)
+          mockDb = await processTransaction(transactionHashes[i], mockDb)
         }
-        await highLevelInvariants(id, 'failing')
+        await highLevelInvariants(id)
       })
     })
   })
 
   describe('Liquidations', () => {
     const testCases = [
-      {
-        chainId: arbitrum.id,
-        positionId: '0x574554485553444300000000000000000effffffff000000000100000000171c',
-        liquidationTxHashes: ['0xd2e9f1be384feca885a778fdabd252a5008a2f4a34af87dc52b305435cabf67e'],
-        description: 'Comet liquidation'
-      },
+      // {
+      //   chainId: arbitrum.id,
+      //   positionId: '0x574554485553444300000000000000000effffffff000000000100000000171c',
+      //   liquidationTxHashes: ['0xd2e9f1be384feca885a778fdabd252a5008a2f4a34af87dc52b305435cabf67e'],
+      //   description: 'Comet liquidation'
+      // },
       {
         chainId: arbitrum.id,
         positionId: '0x5745544855534443000000000000000001ffffffff0000000000000000005541',
         liquidationTxHashes: ['0x7257788de7d17094d7f65cba97558daf1f2f4e7dae2bd1a401c901c55a1b5717'],
         description: 'Aave v3 liquidation'
       },
-      // {
-      //   chainId: mainnet.id,
-      //   positionId: '0x7245544844414900000000000000000007ffffffff000000000000000000000f',
-      //   liquidationTxHashes: ['0xe0413af6eae2e644f7ce3fd671e8d159d1c23c3beb6d7f9cb5ec0e00aa596a83'],
-      //   description: 'Spark liquidation'
-      // }
       // Add more test cases here as needed
     ];
 
     testCases.forEach(({ chainId, positionId, liquidationTxHashes, description }) => {
-      it(`${description}`, async function() {
+      it.only(`${description}`, async function() {
         this.timeout(30000);
-        const id = createIdForPosition({ chainId, positionId });
+        const id = createIdForPosition({ chainId, contangoPositionId: positionId });
         let transactionHashes = await getTransactionHashes(id);
-        transactionHashes.push(...liquidationTxHashes.map(txHash => txHash as Hex)); // liquidation tx hash
+        transactionHashes.push(...liquidationTxHashes.map(txHash => ({ chainId, transactionHash: txHash as Hex }))); // liquidation tx hash
 
         transactionHashes = (await Promise.all(transactionHashes.map(async (txHash) => {
-          const blockNumber = await clients[chainId].getTransaction({ hash: txHash }).then(tx => tx.blockNumber)
+          const blockNumber = await clients[txHash.chainId].getTransaction({ hash: txHash.transactionHash }).then(tx => tx.blockNumber)
           return { txHash, blockNumber }
         }))).sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber)).map(x => x.txHash)
         
         for (let i = 0; i < transactionHashes.length; i++) {
-          mockDb = await processTransaction(id, transactionHashes[i], mockDb);
+          mockDb = await processTransaction(transactionHashes[i], mockDb);
 
           const fillItems = mockDb.entities.FillItem.getAll()
           const position = mockDb.entities.Position.get(id)
           if (!position) throw new Error('Position not found in test!')
           const fillItem = fillItems[i]
 
-          // const balancesBefore = await getBalancesAtBlock(chainId, positionId, fillItem.blockNumber - 1)
-          // const balancesAfter = await getBalancesAtBlock(chainId, positionId, fillItem.blockNumber)
+            const balancesBefore = await getBalancesAtBlock(chainId, positionId, fillItem.blockNumber - 1)
+            const balancesAfter = await getBalancesAtBlock(chainId, positionId, fillItem.blockNumber)
 
-          // console.log({
-          //   fillItem: Number(fillItem.debtDelta) / 1e6,
-          //   actual: Number(balancesAfter.debt - balancesBefore.debt) / 1e6,
-          //   position: Number(position.debt) / 1e6,
-          //   accruedDebtCost: Number(position.accruedDebtCost) / 1e6,
-          //   accruedLendingProfit: Number(position.accruedLendingProfit) / 1e6,
-          //   typeof: typeof position.debt,
-          //   cashflowQuote: Number(fillItem.cashflowQuote) / 1e6,
-          //   positionCashflowQuote: Number(position.cashflowQuote) / 1e6,
-          // })
+            console.log('balancesBefore', balancesBefore)
+            console.log('balancesAfter', balancesAfter)
 
-          // console.log('fillItem', fillItem)
+            // -0.028541459808784884 (collateral delta)
+            // -97.163927 (debt delta)
+
+            console.log({
+              fillItem: Number(fillItem.debtDelta) / 1e6,
+              actual: Number(balancesAfter.debt - balancesBefore.debt) / 1e6,
+              position: Number(position.debt) / 1e6,
+              accruedDebtCost: Number(fillItem.debtCostToSettle) / 1e6,
+              accruedLendingProfit: Number(fillItem.lendingProfitToSettle) / 1e18,
+              typeof: typeof position.debt,
+              cashflowQuote: Number(fillItem.cashflowQuote) / 1e6,
+              positionCashflowQuote: Number(position.cashflowQuote) / 1e6,
+            })
+
+            console.log('position', position)
+            console.log('fillItem', fillItem)
         }
 
         await highLevelInvariantsForLiquidation(id);

@@ -1,9 +1,9 @@
-import { ContangoCollateralEvent, ContangoDebtEvent, IMoneyMarket } from "generated";
-import { eventStore } from "./Store";
+import { IMoneyMarket } from "generated";
 import { createTokenId } from "./utils/getTokenDetails";
 import { createEventId } from "./utils/ids";
-import { EventType } from "./utils/types";
+import { CollateralEvent, DebtEvent, EventType } from "./utils/types";
 import { getPositionSafe } from "./utils/common";
+import { eventProcessor } from "./accounting/processTransactions";
 
 // Debt events
 IMoneyMarket.Borrowed.handler(async ({ event, context }) => {
@@ -13,7 +13,7 @@ IMoneyMarket.Borrowed.handler(async ({ event, context }) => {
   if (!position) return
 
   const eventId = createEventId({ ...event, eventType: EventType.DEBT })
-  const entity: ContangoDebtEvent = {
+  const entity: DebtEvent = {
     id: eventId,
     contangoPositionId: event.params.positionId,
     debtDelta: event.params.amount,
@@ -23,21 +23,23 @@ IMoneyMarket.Borrowed.handler(async ({ event, context }) => {
     blockNumber: event.block.number,
     blockTimestamp: event.block.timestamp,
     transactionHash: event.transaction.hash,
+    eventType: EventType.DEBT,
   }
 
-  context.ContangoDebtEvent.set(entity)
-  eventStore.addLog({ ...entity, eventType: EventType.DEBT })
+  await eventProcessor.processEvent(entity, context)
 
 }, { wildcard: true })
 
 IMoneyMarket.Repaid.handler(async ({ event, context }) => {
   // there are other events that match this wildcard event signature. We check if this position exists to ensure we only process the correct event
   // using the `registerContract` function from envio results in terrible performance loss, so this is preferred
+
+  // TODO: maybe remove this check? (I think it's redundant)
   const position = await getPositionSafe({ chainId: event.chainId, positionId: event.params.positionId, context })
   if (!position) return
 
   const eventId = createEventId({ ...event, eventType: EventType.DEBT })
-  const entity: ContangoDebtEvent = {
+  const entity: DebtEvent = {
     id: eventId,
     contangoPositionId: event.params.positionId,
     debtDelta: -event.params.amount,
@@ -47,10 +49,10 @@ IMoneyMarket.Repaid.handler(async ({ event, context }) => {
     blockNumber: event.block.number,
     blockTimestamp: event.block.timestamp,
     transactionHash: event.transaction.hash,
+    eventType: EventType.DEBT,
   }
 
-  context.ContangoDebtEvent.set(entity)
-  eventStore.addLog({ ...entity, eventType: EventType.DEBT })
+  await eventProcessor.processEvent(entity, context)
 
 }, { wildcard: true })
 
@@ -62,7 +64,7 @@ IMoneyMarket.Lent.handler(async ({ event, context }) => {
   if (!position) return
 
   const eventId = createEventId({ ...event, eventType: EventType.COLLATERAL })
-  const entity: ContangoCollateralEvent = {
+  const entity: CollateralEvent = {
     id: eventId,
     contangoPositionId: event.params.positionId,
     collateralDelta: event.params.amount,
@@ -72,10 +74,10 @@ IMoneyMarket.Lent.handler(async ({ event, context }) => {
     blockNumber: event.block.number,
     blockTimestamp: event.block.timestamp,
     transactionHash: event.transaction.hash,
+    eventType: EventType.COLLATERAL,
   }
 
-  context.ContangoCollateralEvent.set(entity)
-  eventStore.addLog({ ...entity, eventType: EventType.COLLATERAL })
+  await eventProcessor.processEvent(entity, context)
 
 }, { wildcard: true })
 
@@ -86,7 +88,7 @@ IMoneyMarket.Withdrawn.handler(async ({ event, context }) => {
   if (!position) return
 
   const eventId = createEventId({ ...event, eventType: EventType.COLLATERAL })
-  const entity: ContangoCollateralEvent = {
+  const entity: CollateralEvent = {
     id: eventId,
     contangoPositionId: event.params.positionId,
     collateralDelta: -event.params.amount,
@@ -96,9 +98,9 @@ IMoneyMarket.Withdrawn.handler(async ({ event, context }) => {
     blockNumber: event.block.number,
     blockTimestamp: event.block.timestamp,
     transactionHash: event.transaction.hash,
+    eventType: EventType.COLLATERAL,
   }
 
-  context.ContangoCollateralEvent.set(entity)
-  eventStore.addLog({ ...entity, eventType: EventType.COLLATERAL })
+  await eventProcessor.processEvent(entity, context)
 
 }, { wildcard: true })

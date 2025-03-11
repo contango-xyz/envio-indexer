@@ -1,10 +1,9 @@
 import { ERC20, ERC20_Transfer_event, WrappedNative } from "generated";
-import { eventStore } from "./Store";
 import { ADDRESSES } from "./utils/constants";
 import { createEventId } from "./utils/ids";
 import { EventType, TransferEvent } from "./utils/types";
 import { zeroAddress } from "viem";
-
+import { eventProcessor } from "./accounting/processTransactions";
 const depositWithdrawalAddresses: string[] = [
   ADDRESSES.vaultProxy,
   ADDRESSES.maestroProxy, // cashflow in alternative ccy goes to the maestro proxy (or at least did in the past)
@@ -27,15 +26,15 @@ const createContangoEvent = (event: ERC20_Transfer_event): TransferEvent => ({
   eventType: EventType.TRANSFER,
 })
 
-ERC20.Transfer.handler(async ({ event }) => {
-  eventStore.addLog(createContangoEvent(event))
+ERC20.Transfer.handler(async ({ event, context }) => {
+  await eventProcessor.processEvent(createContangoEvent(event), context)
 },
 {
   wildcard: true,
   eventFilters: depositWithdrawalFilters
 })
 
-WrappedNative.Deposit.handler(async ({ event }) => {
+WrappedNative.Deposit.handler(async ({ event, context }) => {
   if (!event.transaction.from) throw new Error('No from address on transaction')
   const erc20Event: ERC20_Transfer_event = {
     ...event,
@@ -46,13 +45,13 @@ WrappedNative.Deposit.handler(async ({ event }) => {
     }
   }
 
-  eventStore.addLog(createContangoEvent(erc20Event))
+  await eventProcessor.processEvent(createContangoEvent(erc20Event), context)
 },
 {
   eventFilters: wrappedNativeDepositFilters
 })
 
-WrappedNative.Withdrawal.handler(async ({ event }) => {
+WrappedNative.Withdrawal.handler(async ({ event, context }) => {
   if (!event.transaction.from) throw new Error('No from address on transaction')
   const erc20Event: ERC20_Transfer_event = {
     ...event,
@@ -63,7 +62,7 @@ WrappedNative.Withdrawal.handler(async ({ event }) => {
     }
   }
 
-  eventStore.addLog(createContangoEvent(erc20Event))
+  await eventProcessor.processEvent(createContangoEvent(erc20Event), context)
 },
 {
   eventFilters: wrappedNativeWithdrawalFilters

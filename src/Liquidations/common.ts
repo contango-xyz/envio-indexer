@@ -9,7 +9,7 @@ export const getPositionIdForProxyAddress = async ({ chainId, user, context }: {
   return underlyingPosition.contangoPositionId as Hex
 }
 
-export const getLiquidationPenalty = ({ collateralToken, collateralDelta, debtDelta, referencePrice }: { collateralToken: Token; collateralDelta: bigint; debtDelta: bigint; referencePrice: bigint; }) => {
-  const effectivePrice = mulDiv(debtDelta, collateralToken.unit, collateralDelta) // quote unit of instrument
+export const getLiquidationPenalty = ({ collateralToken, collateralDelta, debtDelta, cashflowQuote, referencePrice }: { cashflowQuote: bigint; collateralToken: Token; collateralDelta: bigint; debtDelta: bigint; referencePrice: bigint; }) => {
+  const effectivePrice = mulDiv(debtDelta + cashflowQuote, collateralToken.unit, collateralDelta) // quote unit of instrument
   return mulDiv(referencePrice, BigInt(1e4), effectivePrice) - BigInt(1e4)
 }

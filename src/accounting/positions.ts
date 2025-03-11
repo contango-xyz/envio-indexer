@@ -6,7 +6,7 @@ import { GenericEvent } from "./lotsAccounting";
 
 export const createPosition = async (
   {
-    positionId,
+    contangoPositionId,
     proxyAddress,
     owner,
     context,
@@ -14,20 +14,20 @@ export const createPosition = async (
   }: GenericEvent & {
     proxyAddress: string;
     owner: string;
-    positionId: string;
+    contangoPositionId: string;
     context: handlerContext
   }
 ) => {
   const { chainId, block: { number: blockNumber, timestamp }, transaction: { hash: transactionHash } } = event
-  const id = createIdForPosition({ ...event, positionId })
+  const id = createIdForPosition({ ...event, contangoPositionId })
 
-  const instrument = await getOrCreateInstrument({ chainId, positionId, context })
-  const { mm, number } = positionIdMapper(positionId)
+  const instrument = await getOrCreateInstrument({ chainId, contangoPositionId, context })
+  const { mm, number } = positionIdMapper(contangoPositionId)
   const newPosition: Position = {
     id,
     chainId,
     proxyAddress,
-    contangoPositionId: positionId,
+    contangoPositionId,
     owner,
     createdAtBlock: blockNumber,
     createdAtTimestamp: timestamp,

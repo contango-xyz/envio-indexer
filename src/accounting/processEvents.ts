@@ -1,36 +1,31 @@
 import { FillItem, handlerContext, Lot, Position, Token } from "generated";
-import { Mutable } from "viem";
-import { eventStore, PositionSnapshot } from "../Store";
-import { getPairForPositionId, getPosition } from "../utils/common";
 import { createFillItemId } from "../utils/ids";
-import { ContangoEvents, EventType, FillItemType, MigrationType, PositionMigratedEvent, TransferEvent } from "../utils/types";
-import { eventsToPartialFillItem, organiseEvents, saveAll } from "./helpers";
-import { AccountingType, allocateFundingCostToLots, allocateFundingProfitToLots, allocateInterestToLots, handleCloseSize, initialiseLot, updateLots } from "./lotsAccounting";
-import { calculateNetCashflows, withCashflows } from "./helpers/cashflows";
-import { calculateFillPrice, getPricesFromLots, ReferencePriceSource } from "./helpers/prices";
-import { withFees } from "./helpers/fees";
-import { calculateDebtAndCollateral } from "./helpers/debtAndCollateral";
-import { handleMigrations } from "./helpers/migrations";
+import { eventsToPartialFillItem } from "./helpers";
+import { OrganisedEvents } from "./helpers/eventStore";
+import { saveFillItem, savePosition } from "./helpers/saveAndLoad";
+import { updateLots } from "./lotsAccounting";
+import { absolute } from "../utils/math-helpers";
 
-export const processEvents = async (
+export const processEventsForPosition = async (
   {
-    events,
+    organisedEvents,
     position: positionSnapshot,
     lots: lotsSnapshot,
     debtToken,
     collateralToken,
   }: {
-    events: ContangoEvents[]
+    organisedEvents: OrganisedEvents
     position: Position
     lots: Lot[]
     debtToken: Token
     collateralToken: Token
   }
 ) => {
-  const { blockNumber, blockTimestamp: timestamp, chainId, transactionHash } = events[0]
+  const genericEvent = organisedEvents.allEvents[0]
+  const { blockNumber, blockTimestamp: timestamp, chainId, transactionHash } = genericEvent
 
   // create the basic (partial) fillItem
-  const { cashflowSwap, ...partialFillItem } = await eventsToPartialFillItem({ position: positionSnapshot, debtToken, collateralToken, events })
+  const { cashflowSwap, ...partialFillItem } = await eventsToPartialFillItem({ position: positionSnapshot, debtToken, collateralToken, organisedEvents })
   const { lendingProfitToSettle, debtCostToSettle, debtDelta, collateralDelta, fillCost_short, fillCost_long } = partialFillItem
 
   const { longLots, shortLots, realisedPnl_long, realisedPnl_short } = await updateLots({
@@ -42,11 +37,11 @@ export const processEvents = async (
     position: positionSnapshot,
     fillCost_short,
     fillCost_long,
-    event: events[0]
+    event: genericEvent
   })
 
   const fillItem: FillItem = {
-    id: createFillItemId({ ...events[0], positionId: positionSnapshot.contangoPositionId }),
+    id: createFillItemId({ ...genericEvent, positionId: positionSnapshot.contangoPositionId }),
     timestamp,
     chainId,
     blockNumber,
@@ -59,6 +54,16 @@ export const processEvents = async (
     ...partialFillItem,
   }
 
+  const shortSizeNet = shortLots.reduce((acc, curr) => acc + curr.size, 0n)
+  const shortSizeGross = shortLots.reduce((acc, curr) => acc + curr.grossSize, 0n)
+
+  const accruedDebtCost = shortSizeGross - shortSizeNet
+
+  const collateralNet = longLots.reduce((acc, curr) => acc + curr.size, 0n)
+  const collateralGross = longLots.reduce((acc, curr) => acc + curr.grossSize, 0n)
+
+  const accruedLendingProfit = collateralNet - collateralGross
+
   // update the position
   const newPosition: Position = {
     ...positionSnapshot,
@@ -68,38 +73,21 @@ export const processEvents = async (
     fees_short: positionSnapshot.fees_short + partialFillItem.fee_short,
     realisedPnl_long: realisedPnl_long + positionSnapshot.realisedPnl_long,
     realisedPnl_short: realisedPnl_short + positionSnapshot.realisedPnl_short,
-    collateral: positionSnapshot.collateral + collateralDelta,
-    debt: positionSnapshot.debt + debtDelta,
-    accruedLendingProfit: positionSnapshot.accruedLendingProfit + lendingProfitToSettle,
-    accruedDebtCost: positionSnapshot.accruedDebtCost + debtCostToSettle,
+    collateral: collateralNet,
+    accruedLendingProfit,
+    debt: absolute(shortSizeNet),
+    accruedDebtCost,
     longCost: longLots.reduce((acc, curr) => acc + curr.openCost, 0n),
     shortCost: shortLots.reduce((acc, curr) => acc + curr.openCost, 0n),
   }
 
-  // return the new position, fillItem, and lots
-  return { position: newPosition, fillItem, lots: [...longLots, ...shortLots] }
-}
-
-export const eventsReducer = async ({ context, position, lots, collateralToken, debtToken, storeKey }: PositionSnapshot & { context: handlerContext }) => {
-
-  try {
-    const events = eventStore.getContangoEvents(storeKey)
-    if (events.length === 0) throw new Error(`Attempted to call eventsReducer with no events in store`)
-
-    // ideally we'd just look for the PositionMigrated event, but the initial implementation of migrations didn't emit that event so this is more robust
-    const positionIds = events.reduce((acc, event) => event.eventType === EventType.POSITION_UPSERTED ? acc.add(event.contangoPositionId) : acc, new Set<string>())
-
-    if (positionIds.size > 1) {
-      const [oldContangoPositionId, newContangoPositionId] = Array.from(positionIds)
-      await handleMigrations({ context, position, lots, debtToken, collateralToken, events, newContangoPositionId })
-      return
-    }
-
-    const result = await processEvents({ events, position, lots, debtToken, collateralToken })
-
-    saveAll({ ...result, context })
-  } catch (e) {
-    console.error('error processing events', e)
-    throw e
+  const result = { position: newPosition, fillItem, lots: [...longLots, ...shortLots] }
+  const saveResult = (context: handlerContext) => {
+    saveFillItem(fillItem, context)
+    savePosition({ ...result, context })
   }
+
+  // return the new position, fillItem, and lots
+  return { result, saveResult }
 }
+
