@@ -314,7 +314,6 @@ type ContangoInstrumentCreatedEvent {
 type TVL {
   id: ID! # `${chainId}_${token.address}`
   chainId: Int!
-  token: Token!
-  timestamp: Int!
+  token: Token! @index
   tvl: BigInt!
 }
