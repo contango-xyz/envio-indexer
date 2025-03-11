@@ -18,7 +18,7 @@ CometLiquidations.AbsorbCollateral.handler(async ({ event, context }) => {
   
   let cashflowInDebtToken = 0n
 
-  if ((collateralDelta + position.collateral + position.accruedLendingProfit) === 0n) {
+  if ((collateralDelta + position.netCollateral) === 0n) {
     const proxyBalance = await getERC20Balance({ chainId: event.chainId, tokenAddress: event.srcAddress, blockNumber: event.block.number, address: event.params.borrower })
     cashflowInDebtToken -= proxyBalance
   }

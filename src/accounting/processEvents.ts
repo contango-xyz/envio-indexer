@@ -28,7 +28,7 @@ export const processEventsForPosition = async (
   const { cashflowSwap, ...partialFillItem } = await eventsToPartialFillItem({ position: positionSnapshot, debtToken, collateralToken, organisedEvents })
   const { lendingProfitToSettle, debtCostToSettle, debtDelta, collateralDelta, fillCost_short, fillCost_long } = partialFillItem
 
-  const { longLots, shortLots, realisedPnl_long, realisedPnl_short } = await updateLots({
+  const { longLots, shortLots, realisedPnl_long, realisedPnl_short, before, after } = await updateLots({
     lots: lotsSnapshot,
     collateralDelta,
     debtDelta,
@@ -41,28 +41,28 @@ export const processEventsForPosition = async (
   })
 
   const fillItem: FillItem = {
+    ...partialFillItem,
     id: createFillItemId({ ...genericEvent, positionId: positionSnapshot.contangoPositionId }),
     timestamp,
     chainId,
     blockNumber,
     transactionHash,
     contangoPositionId: positionSnapshot.contangoPositionId,
+    grossCollateralBefore: before.grossCollateral,
+    grossCollateralAfter: after.grossCollateral,
+    netCollateralBefore: before.netCollateral,
+    netCollateralAfter: after.netCollateral,
+    grossDebtBefore: before.grossDebt,
+    grossDebtAfter: after.grossDebt,
+    netDebtBefore: before.netDebt,
+    netDebtAfter: after.netDebt,
+    collateralDelta: after.netCollateral - before.netCollateral,
+    debtDelta: after.netDebt - before.netDebt,
     position_id: positionSnapshot.id,
     realisedPnl_long,
     realisedPnl_short,
     cashflowSwap_id: cashflowSwap?.id,
-    ...partialFillItem,
   }
-
-  const shortSizeNet = shortLots.reduce((acc, curr) => acc + curr.size, 0n)
-  const shortSizeGross = shortLots.reduce((acc, curr) => acc + curr.grossSize, 0n)
-
-  const accruedDebtCost = shortSizeGross - shortSizeNet
-
-  const collateralNet = longLots.reduce((acc, curr) => acc + curr.size, 0n)
-  const collateralGross = longLots.reduce((acc, curr) => acc + curr.grossSize, 0n)
-
-  const accruedLendingProfit = collateralNet - collateralGross
 
   // update the position
   const newPosition: Position = {
@@ -73,10 +73,10 @@ export const processEventsForPosition = async (
     fees_short: positionSnapshot.fees_short + partialFillItem.fee_short,
     realisedPnl_long: realisedPnl_long + positionSnapshot.realisedPnl_long,
     realisedPnl_short: realisedPnl_short + positionSnapshot.realisedPnl_short,
-    collateral: collateralNet,
-    accruedLendingProfit,
-    debt: absolute(shortSizeNet),
-    accruedDebtCost,
+    grossCollateral: after.grossCollateral,
+    netCollateral: after.netCollateral,
+    grossDebt: after.grossDebt,
+    netDebt: after.netDebt,
     longCost: longLots.reduce((acc, curr) => acc + curr.openCost, 0n),
     shortCost: shortLots.reduce((acc, curr) => acc + curr.openCost, 0n),
   }

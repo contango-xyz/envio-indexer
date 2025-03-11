@@ -10,7 +10,7 @@ import { clients } from '../src/clients'
 import { createInstrumentId, getBalancesAtBlock } from '../src/utils/common'
 import { createTokenId } from '../src/utils/getTokenDetails'
 import { IdForPosition, createIdForPosition } from '../src/utils/ids'
-import { mulDiv } from '../src/utils/math-helpers'
+import { absolute, mulDiv } from '../src/utils/math-helpers'
 import { FillItemType, ReturnPromiseType } from '../src/utils/types'
 import { getTransactionEvents, getTransactionHashes, processTransaction, processTransactionsForPosition } from './testHelpers'
 const { MockDb } = TestHelpers
@@ -241,8 +241,8 @@ describe('indexer tests', () => {
           }
 
           // first assert that the old position has been reset to zero
-          expect(oldPosition.accruedDebtCost).to.equal(0n)
-          expect(oldPosition.accruedLendingProfit).to.equal(0n)
+          expect(oldPosition.netDebt).to.equal(0n)
+          expect(oldPosition.grossDebt).to.equal(0n)
           expect(oldPosition.cashflowBase).to.equal(0n)
           expect(oldPosition.cashflowQuote).to.equal(0n)
           expect(oldPosition.realisedPnl_long).to.equal(0n)
@@ -250,8 +250,8 @@ describe('indexer tests', () => {
           expect(oldPosition.longCost).to.equal(0n)
           expect(oldPosition.shortCost).to.equal(0n)
           expect(oldPosition.lotCount).to.equal(0)
-          expect(oldPosition.collateral).to.equal(0n)
-          expect(oldPosition.debt).to.equal(0n)
+          expect(oldPosition.netCollateral).to.equal(0n)
+          expect(oldPosition.netDebt).to.equal(0n)
           expect(oldPosition.fees_long).to.equal(0n)
           expect(oldPosition.fees_short).to.equal(0n)
           
@@ -270,10 +270,10 @@ describe('indexer tests', () => {
           expect(migrationFillItem.fillItemType).to.equal(FillItemType.MigrateLendingMarket)
 
           // check that the new position has the same collateral and debt as the old position PLUS the interest accrued has been settled
-          expect(newPosition.collateral).to.equal(positionBeforeMigration.collateral + migrationFillItem.lendingProfitToSettle)
-          expect(newPosition.debt).to.equal(positionBeforeMigration.debt + migrationFillItem.debtCostToSettle)
-          expect(newPosition.accruedLendingProfit).to.equal(positionBeforeMigration.accruedLendingProfit + migrationFillItem.lendingProfitToSettle)
-          expect(newPosition.accruedDebtCost).to.equal(positionBeforeMigration.accruedDebtCost + migrationFillItem.debtCostToSettle)
+          expect(newPosition.netCollateral).to.equal(positionBeforeMigration.netCollateral + migrationFillItem.lendingProfitToSettle)
+          expect(newPosition.grossCollateral).to.equal(newPosition.grossCollateral)
+          expect(newPosition.netDebt).to.equal(positionBeforeMigration.netDebt + migrationFillItem.debtCostToSettle)
+          expect(newPosition.grossDebt).to.equal(positionBeforeMigration.grossDebt + migrationFillItem.debtCostToSettle)
 
           // we currently don't have any migrations that have cashflows, but if we ever do, we need to decide where to assign those cashflows (in terms of fill items)
           // if we make the right hand side of the assertion this way, then we'll be alerted to the fact that we need to update the code
@@ -367,8 +367,10 @@ describe('indexer tests', () => {
           }
 
           // first assert that the old position has been reset to zero
-          expect(oldPosition.accruedDebtCost).to.equal(0n)
-          expect(oldPosition.accruedLendingProfit).to.equal(0n)
+          expect(oldPosition.netDebt).to.equal(0n)
+          expect(oldPosition.grossDebt).to.equal(0n)
+          expect(oldPosition.netCollateral).to.equal(0n)
+          expect(oldPosition.grossCollateral).to.equal(0n)
           expect(oldPosition.cashflowBase).to.equal(0n)
           expect(oldPosition.cashflowQuote).to.equal(0n)
           expect(oldPosition.realisedPnl_long).to.equal(0n)
@@ -376,8 +378,6 @@ describe('indexer tests', () => {
           expect(oldPosition.longCost).to.equal(0n)
           expect(oldPosition.shortCost).to.equal(0n)
           expect(oldPosition.lotCount).to.equal(0)
-          expect(oldPosition.collateral).to.equal(0n)
-          expect(oldPosition.debt).to.equal(0n)
           expect(oldPosition.fees_long).to.equal(0n)
           expect(oldPosition.fees_short).to.equal(0n)
           
@@ -406,13 +406,10 @@ describe('indexer tests', () => {
           expect(swapEvent).to.not.be.null
           if (!swapEvent) throw new Error('Swap event not found in test!')
 
-          expect(Number(migrationCloseFillItem.lendingProfitToSettle)).to.be.greaterThanOrEqual(Number(swapEvent.params.amountIn - positionBeforeMigration.collateral))
-          expect(newPosition.collateral).to.equal(swapEvent.params.amountOut)
-          expect(newPosition.debt).to.equal(migrationOpenFillItem.debtDelta)
-
-          // we're migrating the base ccy
-          expect(newPosition.accruedLendingProfit).to.equal(0n)
-          expect(newPosition.accruedDebtCost).to.equal(0n)
+          expect(newPosition.netCollateral).to.equal(swapEvent.params.amountOut)
+          expect(newPosition.grossCollateral).to.equal(swapEvent.params.amountOut)
+          expect(newPosition.netDebt).to.equal(migrationOpenFillItem.debtDelta)
+          expect(newPosition.grossDebt).to.equal(migrationOpenFillItem.debtDelta)
 
           // cashflow base should be the sum of the old position's cashflow base, converted to the new base ccy
           const expectedCashflowBase = mulDiv(positionBeforeMigration.cashflowBase + migrationCloseFillItem.cashflowBase, swapEvent.params.amountOut, swapEvent.params.amountIn)
@@ -534,8 +531,8 @@ describe('indexer tests', () => {
 
     expect(newPosition.id).to.equal(newId)
     expect(newPosition.migratedTo_id).to.equal(undefined)
-    expect(newPosition.collateral).to.equal(BigInt(0.009409545711451312e18))
-    expect(newPosition.debt).to.equal(BigInt(16.350110e6))
+    expect(newPosition.grossCollateral).to.equal(BigInt(0.009409545711451312e18))
+    expect(newPosition.netDebt).to.equal(BigInt(16.350110e6))
 
     expect(longLots.reduce((acc, lot) => acc + lot.openCost, 0n)).to.equal(newPosition.longCost)
     expect(shortLots.reduce((acc, lot) => acc + lot.openCost, 0n)).to.equal(newPosition.shortCost)
@@ -557,10 +554,10 @@ describe('indexer tests', () => {
     expect(oldPosition.realisedPnl_short).to.equal(0n)
     expect(oldPosition.longCost).to.equal(0n)
     expect(oldPosition.shortCost).to.equal(0n)
-    expect(oldPosition.collateral).to.equal(0n)
-    expect(oldPosition.debt).to.equal(0n)
-    expect(oldPosition.accruedLendingProfit).to.equal(0n)
-    expect(oldPosition.accruedDebtCost).to.equal(0n)
+    expect(oldPosition.netCollateral).to.equal(0n)
+    expect(oldPosition.grossCollateral).to.equal(0n)
+    expect(oldPosition.netDebt).to.equal(0n)
+    expect(oldPosition.grossDebt).to.equal(0n)
     expect(oldPosition.fees_long).to.equal(0n)
     expect(oldPosition.fees_short).to.equal(0n)
     
@@ -568,7 +565,7 @@ describe('indexer tests', () => {
     if (!newPosition) throw new Error('New position not found in test!')
 
     expect(newPosition.migratedTo_id).to.equal(undefined)
-    expect(Number(newPosition.collateral)).to.be.greaterThan(0)
+    expect(Number(newPosition.netCollateral)).to.be.greaterThan(0)
   })
 
   it('Short ETH/USDC - 0x leverage', async function() {
@@ -666,14 +663,16 @@ describe('indexer tests', () => {
         // assert debt values and short lot size
         expect(fillItem.debtDelta).to.equal(BigInt(498.75e6))
         expect(shortLot.size).to.equal(-fillItem.debtDelta) // short 498.75 USDC ==> size is negative
-        expect(position.debt).to.equal(fillItem.debtDelta)
-        expect(fillItem.debtCostToSettle).to.equal(0n)
+        expect(position.netDebt).to.equal(fillItem.netDebtAfter)
+        const grossDebtDelta = fillItem.grossDebtAfter - fillItem.grossDebtBefore
+        expect(grossDebtDelta).to.equal(fillItem.debtDelta)
 
         // assert collateral values and long lot size
         expect(fillItem.collateralDelta).to.equal(BigInt(598.508620e6))
         expect(longLot.size).to.equal(fillItem.collateralDelta) // long 598.508620 USDT ==> size is positive
-        expect(position.collateral).to.equal(fillItem.collateralDelta)
-        expect(fillItem.lendingProfitToSettle).to.equal(0n)
+        expect(position.netCollateral).to.equal(fillItem.collateralDelta)
+        const grossCollateralDelta = fillItem.grossCollateralAfter - fillItem.grossCollateralBefore
+        expect(grossCollateralDelta).to.equal(fillItem.collateralDelta)
 
         // assert cost
         expect(position.longCost).to.equal(BigInt(-598.5e6))
@@ -715,17 +714,15 @@ describe('indexer tests', () => {
         expect(fillItem.debtDelta).to.equal(BigInt(-231.925250e6))
         const expectedShortLotSize = -previousFillItem.debtDelta - fillItem.debtCostToSettle - fillItem.debtDelta
         expect(shortLot.size).to.equal(expectedShortLotSize) // short 498.75 USDC ==> size is negative
-        expect(position.debt).to.equal(previousFillItem.debtDelta + fillItem.debtDelta)
-        expect(position.accruedDebtCost).to.equal(fillItem.debtCostToSettle)
+        expect(position.netDebt).to.equal(fillItem.netDebtAfter)
         expect(fillItem.debtCostToSettle).to.equal(1015n) // 0.001015 USDC in interest accumulated since opening the position
 
         // assert collateral values and long lot size
         expect(fillItem.collateralDelta).to.equal(BigInt(-202.013204e6))
         const expectedLongLotSize = previousFillItem.collateralDelta + fillItem.lendingProfitToSettle + fillItem.collateralDelta
         expect(longLot.size).to.equal(expectedLongLotSize)
-        expect(position.collateral).to.equal(previousFillItem.collateralDelta + fillItem.collateralDelta)
+        expect(position.netCollateral).to.equal(fillItem.netCollateralAfter)
         expect(fillItem.lendingProfitToSettle).to.equal(4266n) // 0.004266 USDT in lending profit accumulated since opening the position
-        expect(position.accruedLendingProfit).to.equal(fillItem.lendingProfitToSettle)
 
         // assert cost
         expect(fillItem.fillCost_long).to.equal(BigInt(202.041156e6)) // debtDelta + cashflowQuote
@@ -780,15 +777,15 @@ describe('indexer tests', () => {
         const previousFillItem = fillItems[i - 1]
         // assert debt values and short lot size
         expect(fillItem.debtDelta).to.equal(BigInt(-266.996703e6))
-        expect(position.debt).to.equal(fillItems.reduce((acc, curr) => acc + curr.debtDelta, 0n))
-        expect(position.accruedDebtCost).to.equal(fillItems.reduce((acc, curr) => acc + curr.debtCostToSettle, 0n))
-        expect(position.accruedDebtCost + position.debt).to.equal(0n)
+        expect(fillItem.netDebtBefore).to.equal(absolute(fillItem.debtDelta))
+        expect(position.netDebt).to.equal(0n)
+        expect(position.grossDebt).to.equal(0n)
 
         // assert collateral values and long lot size
         expect(fillItem.collateralDelta).to.equal(BigInt(-396.727943e6))
-        expect(position.collateral).to.equal(fillItems.reduce((acc, curr) => acc + curr.collateralDelta, 0n))
-        expect(position.accruedLendingProfit).to.equal(fillItems.reduce((acc, curr) => acc + curr.lendingProfitToSettle, 0n))
-        expect(position.accruedLendingProfit + position.collateral).to.equal(0n)
+        expect(fillItem.netCollateralBefore).to.equal(absolute(fillItem.collateralDelta))
+        expect(position.netCollateral).to.equal(0n)
+        expect(position.grossCollateral).to.equal(0n)
 
         // assert cost
         expect(fillItem.fillCost_long).to.equal(BigInt(396.432347e6)) // debtDelta + cashflowQuote
@@ -873,12 +870,12 @@ describe('indexer tests', () => {
 
   describe('Liquidations', () => {
     const testCases = [
-      // {
-      //   chainId: arbitrum.id,
-      //   positionId: '0x574554485553444300000000000000000effffffff000000000100000000171c',
-      //   liquidationTxHashes: ['0xd2e9f1be384feca885a778fdabd252a5008a2f4a34af87dc52b305435cabf67e'],
-      //   description: 'Comet liquidation'
-      // },
+      {
+        chainId: arbitrum.id,
+        positionId: '0x574554485553444300000000000000000effffffff000000000100000000171c',
+        liquidationTxHashes: ['0xd2e9f1be384feca885a778fdabd252a5008a2f4a34af87dc52b305435cabf67e'],
+        description: 'Comet liquidation'
+      },
       {
         chainId: arbitrum.id,
         positionId: '0x5745544855534443000000000000000001ffffffff0000000000000000005541',
@@ -889,7 +886,7 @@ describe('indexer tests', () => {
     ];
 
     testCases.forEach(({ chainId, positionId, liquidationTxHashes, description }) => {
-      it.only(`${description}`, async function() {
+      it(`${description}`, async function() {
         this.timeout(30000);
         const id = createIdForPosition({ chainId, contangoPositionId: positionId });
         let transactionHashes = await getTransactionHashes(id);
@@ -902,34 +899,6 @@ describe('indexer tests', () => {
         
         for (let i = 0; i < transactionHashes.length; i++) {
           mockDb = await processTransaction(transactionHashes[i], mockDb);
-
-          const fillItems = mockDb.entities.FillItem.getAll()
-          const position = mockDb.entities.Position.get(id)
-          if (!position) throw new Error('Position not found in test!')
-          const fillItem = fillItems[i]
-
-            const balancesBefore = await getBalancesAtBlock(chainId, positionId, fillItem.blockNumber - 1)
-            const balancesAfter = await getBalancesAtBlock(chainId, positionId, fillItem.blockNumber)
-
-            console.log('balancesBefore', balancesBefore)
-            console.log('balancesAfter', balancesAfter)
-
-            // -0.028541459808784884 (collateral delta)
-            // -97.163927 (debt delta)
-
-            console.log({
-              fillItem: Number(fillItem.debtDelta) / 1e6,
-              actual: Number(balancesAfter.debt - balancesBefore.debt) / 1e6,
-              position: Number(position.debt) / 1e6,
-              accruedDebtCost: Number(fillItem.debtCostToSettle) / 1e6,
-              accruedLendingProfit: Number(fillItem.lendingProfitToSettle) / 1e18,
-              typeof: typeof position.debt,
-              cashflowQuote: Number(fillItem.cashflowQuote) / 1e6,
-              positionCashflowQuote: Number(position.cashflowQuote) / 1e6,
-            })
-
-            console.log('position', position)
-            console.log('fillItem', fillItem)
         }
 
         await highLevelInvariantsForLiquidation(id);

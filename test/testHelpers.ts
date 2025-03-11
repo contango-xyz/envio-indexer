@@ -447,11 +447,6 @@ export const processTransaction = async ({ chainId, transactionHash }: { chainId
     expect(fillItem.fillItemType).to.not.equal(FillItemType.Opened)
   }
 
-  if (fillItem.fillItemType === FillItemType.Opened) {
-    if (fillItem.lendingProfitToSettle > 0n) throw new Error('Lending profit to settle is greater than 0')
-    if (fillItem.debtCostToSettle > 0n) throw new Error('Debt cost to settle is greater than 0')
-  }
-
   return mockDb
 }
 

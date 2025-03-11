@@ -6,14 +6,14 @@ import { PriceConverters } from "./prices"
 
 const processDebtEvents = ({ position, debtEvents }: { position: Position; debtEvents: DebtEvent[] }) => {
   return debtEvents.reduce((acc, event) => {
-    const debtCostToSettle = max(event.balanceBefore - position.debt, 0n)
+    const debtCostToSettle = max(event.balanceBefore - position.netDebt, 0n)
     return { debtCostToSettle: acc.debtCostToSettle + debtCostToSettle, debtDelta: acc.debtDelta + event.debtDelta }
   }, { debtCostToSettle: 0n, debtDelta: 0n })
 }
 
 const processCollateralEvents = ({ position, collateralEvents }: { position: Position; collateralEvents: CollateralEvent[] }) => {
   return collateralEvents.reduce((acc, event) => {
-    const lendingProfitToSettle = max(event.balanceBefore - (position.accruedLendingProfit + position.collateral), 0n)
+    const lendingProfitToSettle = max(event.balanceBefore - position.netCollateral, 0n)
     return { lendingProfitToSettle: acc.lendingProfitToSettle + lendingProfitToSettle, collateralDelta: acc.collateralDelta + event.collateralDelta }
   }, { lendingProfitToSettle: 0n, collateralDelta: 0n })
 }
@@ -34,9 +34,9 @@ const calculateDebtFromPositionUpsertedEvent = ({ position, positionUpsertedEven
     }
   }
 
-  if (position.debt + debtDelta < 0n) {
+  if (position.netDebt + debtDelta < 0n) {
     // we know this must be a closing fill event
-    debtCostToSettle = -position.debt - debtDelta
+    debtCostToSettle = -position.netDebt - debtDelta
   }
 
   return { debtCostToSettle, debtDelta }
@@ -56,7 +56,7 @@ const calculateCollateralValues = ({ position, collateralEvents, positionUpserte
   if (result.collateralDelta !== 0n) return result
 
   const collateralDelta = positionUpsertedEvents.reduce((acc, event) => acc + event.quantityDelta, 0n)
-  let lendingProfitToSettle = (position.collateral + collateralDelta) <= 0n ? -position.collateral - collateralDelta : 0n
+  let lendingProfitToSettle = (position.netCollateral + collateralDelta) <= 0n ? -position.netCollateral - collateralDelta : 0n
 
   return { lendingProfitToSettle, collateralDelta }
 }
@@ -64,7 +64,7 @@ const calculateCollateralValues = ({ position, collateralEvents, positionUpserte
 export const calculateDebtAndCollateral = ({ position, debtEvents, collateralEvents, positionUpsertedEvents, converters, liquidationEvents }: OrganisedEvents & { position: Position; converters: PriceConverters }) => {
   if (liquidationEvents.length > 0) {
     const [{ collateralDelta, debtDelta, lendingProfitToSettle, debtCostToSettle }] = liquidationEvents
-    const isFullyLiquidated = position.collateral + position.accruedLendingProfit + collateralDelta <= 0n
+    const isFullyLiquidated = position.netCollateral + collateralDelta <= 0n
     return {
       collateralDelta,
       debtDelta,
@@ -78,8 +78,8 @@ export const calculateDebtAndCollateral = ({ position, debtEvents, collateralEve
   const collateralValues = calculateCollateralValues({ position, collateralEvents, positionUpsertedEvents })
 
   const fillItemType = (() => {
-    if (position.collateral === 0n) return FillItemType.Opened
-    if ((position.collateral + collateralValues.collateralDelta) <= 0n) return FillItemType.Closed
+    if (position.netCollateral === 0n) return FillItemType.Opened
+    if ((position.netCollateral + collateralValues.collateralDelta) <= 0n) return FillItemType.Closed
     return FillItemType.Modified
   })()
 

@@ -51,8 +51,8 @@ export const getBalancesAtBlock = async (chainId: number, positionId: string, bl
 export const getInterestToSettleOnLiquidation = async ({ chainId, blockNumber, position }: { position: Position; chainId: number; blockNumber: number }) => {
   const { collateral: collateralBefore, debt: debtBefore } = await getBalancesAtBlock(chainId, position.contangoPositionId, blockNumber - 1)
 
-  const lendingProfitToSettle = max(collateralBefore - position.collateral, 0n)
-  const debtCostToSettle = max(debtBefore - position.debt, 0n)
+  const lendingProfitToSettle = max(collateralBefore - position.netCollateral, 0n)
+  const debtCostToSettle = max(debtBefore - position.netDebt, 0n)
 
   return { lendingProfitToSettle, debtCostToSettle, collateralBefore, debtBefore }
 }

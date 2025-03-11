@@ -34,8 +34,20 @@ type FillItem {
   lendingProfitToSettle: BigInt!
   debtCostToSettle: BigInt!
 
-  collateralDelta: BigInt!
-  debtDelta: BigInt!
+  netCollateralBefore: BigInt! # collateral + lending profits before the fill
+  netCollateralAfter: BigInt! # collateral + lending profits after the fill
+
+  grossCollateralBefore: BigInt! # sum of all previous fills' gross collateral delta
+  grossCollateralAfter: BigInt! # sum of all previous fills' gross collateral delta + current fill's gross collateral delta
+
+  netDebtBefore: BigInt! # debt + interest accumulated before the fill
+  netDebtAfter: BigInt! # debt + interest accumulated after the fill
+
+  grossDebtBefore: BigInt! # sum of all previous fills' gross debt delta
+  grossDebtAfter: BigInt! # sum of all previous fills' gross debt delta + current fill's gross debt delta
+
+  debtDelta: BigInt! # actual debt delta (net debt after - net debt before)
+  collateralDelta: BigInt! # actual collateral delta (net collateral after - net collateral before)
 
   # these are absolute values. If the trade uses cashflow in quote, the cashflowQuote will be an non zero integer and the cashflowBase will be 0 and vice versa
   # there are certain scenarios where we will have a cashflow in both quote and base, e.g closing into base and we have dust
@@ -87,11 +99,11 @@ type Position {
   moneyMarket: Int! @index
   number: Int!
 
-  collateral: BigInt! # this is the sum of the collateral deltas of all fills (not including accrued lending profit)
-  accruedLendingProfit: BigInt! # this is the collateral balance with lending profit included
+  grossCollateral: BigInt! # sum of all collateral in the position
+  netCollateral: BigInt! # collateral including accrued and unsettled lending profit
 
-  debt: BigInt! # this is the sum of the debt deltas of all fills (not including accrued debt cost)
-  accruedDebtCost: BigInt! # this is the debt balance with interest accrued included
+  grossDebt: BigInt! # sum of gross debt deltas of all fills
+  netDebt: BigInt! # debt including accrued and unsettled debt cost
 
   cashflowBase: BigInt! # sum of all cashflows in base ccy (absolute value, not "relative")
   cashflowQuote: BigInt! # sum of all cashflows in quote ccy (absolute value, not "relative")

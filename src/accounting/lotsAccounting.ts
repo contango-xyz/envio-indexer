@@ -1,6 +1,6 @@
 import { genericEvent } from "envio/src/Internal.gen";
 import { Lot, Position } from 'generated';
-import { max, min, mulDiv } from "../utils/math-helpers";
+import { absolute, max, min, mulDiv } from "../utils/math-helpers";
 import { ContangoEvents, Mutable } from "../utils/types";
 
 export enum AccountingType {
@@ -125,9 +125,14 @@ export const handleCostDelta = ({ lots, costDelta }: { lots: Mutable<Lot>[]; cos
   return lots
 }
 
-export const allocateInterestToLots = async ({ lots, lendingProfitToSettle, debtCostToSettle }: { lots: Lot[]; lendingProfitToSettle: bigint; debtCostToSettle: bigint; }) => {
+export const filterLotsByAccountingType = ({ lots }: { lots: Lot[]; }) => {
   let longLots: Mutable<Lot>[] = [...lots.filter(lot => lot.accountingType === AccountingType.Long)] // create a copy
   let shortLots: Mutable<Lot>[] = [...lots.filter(lot => lot.accountingType === AccountingType.Short)] // create a copy
+
+  return { longLots, shortLots }
+}
+
+export const allocateInterestToLots = async ({ longLots, shortLots, lendingProfitToSettle, debtCostToSettle }: { longLots: Lot[]; shortLots: Lot[]; lendingProfitToSettle: bigint; debtCostToSettle: bigint; }) => {
 
   longLots = await allocateFundingProfitToLots({ lots: longLots, fundingProfitToSettle: lendingProfitToSettle }) // size grows, which is a good thing
   longLots = await allocateFundingCostToLots({ lots: longLots, fundingCostToSettle: debtCostToSettle }) // cost grows
@@ -139,9 +144,29 @@ export const allocateInterestToLots = async ({ lots, lendingProfitToSettle, debt
 }
 
 
+export const getCollateralAndDebtFromLots = ({ longLots, shortLots }: { longLots: Lot[]; shortLots: Lot[]; }) => {
+  const { grossCollateral, netCollateral } = longLots.reduce((acc, lot) => {
+    return {
+      grossCollateral: acc.grossCollateral + lot.grossSize,
+      netCollateral: acc.netCollateral + lot.size,
+    }
+  }, { grossCollateral: 0n, netCollateral: 0n })
+
+  const { grossDebt, netDebt } = shortLots.reduce((acc, lot) => {
+    return {
+      grossDebt: acc.grossDebt + lot.grossSize,
+      netDebt: acc.netDebt + lot.size,
+    }
+  }, { grossDebt: 0n, netDebt: 0n })
+
+  return { grossCollateral, netCollateral, grossDebt: absolute(grossDebt), netDebt: absolute(netDebt) }
+}
+
 export const updateLots = async ({ lots, collateralDelta, debtDelta, lendingProfitToSettle, debtCostToSettle, position, fillCost_short, fillCost_long, event }: { event: ContangoEvents; fillCost_short: bigint; fillCost_long: bigint; position: Position; debtCostToSettle: bigint; lendingProfitToSettle: bigint; lots: Lot[]; collateralDelta: bigint; debtDelta: bigint; }) => {
 
-  let { longLots, shortLots } = await allocateInterestToLots({ lots, lendingProfitToSettle, debtCostToSettle })
+  let { longLots, shortLots } = await allocateInterestToLots({ ...filterLotsByAccountingType({ lots }), lendingProfitToSettle, debtCostToSettle })
+
+  const before = getCollateralAndDebtFromLots({ longLots, shortLots })
 
   let realisedPnl_long = 0n
   let realisedPnl_short = 0n
@@ -180,6 +205,8 @@ export const updateLots = async ({ lots, collateralDelta, debtDelta, lendingProf
     realisedPnl_long = fillCost_long - closedCostRef.value
   }
 
-  return { longLots, shortLots, realisedPnl_long, realisedPnl_short }
+  const after = getCollateralAndDebtFromLots({ longLots, shortLots })
+
+  return { longLots, shortLots, realisedPnl_long, realisedPnl_short, before, after }
 
 }

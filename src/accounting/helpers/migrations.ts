@@ -4,7 +4,7 @@ import { createFillItemId, createIdForLot, createIdForPosition } from "../../uti
 import { mulDiv } from "../../utils/math-helpers";
 import { EventType, FillItemType, MigrationType, Mutable } from "../../utils/types";
 import { eventsToPartialFillItem } from "../helpers";
-import { AccountingType, allocateInterestToLots, initialiseLot } from "../lotsAccounting";
+import { AccountingType, allocateInterestToLots, filterLotsByAccountingType, getCollateralAndDebtFromLots, initialiseLot } from "../lotsAccounting";
 import { withCashflows } from "./cashflows";
 import { calculateDebtAndCollateral } from "./debtAndCollateral";
 import { OrganisedEvents, organiseEvents } from "./eventStore";
@@ -12,16 +12,16 @@ import { withFees } from "./fees";
 import { calculateFillPrice, getPricesFromLots } from "./prices";
 import { saveFillItem, savePosition } from "./saveAndLoad";
 
-const handleMigrateBase = async ({ position, debtToken, collateralToken, organisedEvents, newContangoPositionId }: { newContangoPositionId: string; position: Position; debtToken: Token; collateralToken: Token; organisedEvents: OrganisedEvents }) => {
+const handleMigrateBase = async ({ lots, position, debtToken, collateralToken, organisedEvents, newContangoPositionId }: { lots: Lot[]; newContangoPositionId: string; position: Position; debtToken: Token; collateralToken: Token; organisedEvents: OrganisedEvents }) => {
   const idOfNewPosition = createIdForPosition({ chainId: position.chainId, contangoPositionId: newContangoPositionId })
   const oldContangoPositionId = position.contangoPositionId
 
   const oldPosition: Position = {
     ...position,
-    collateral: 0n,
-    accruedLendingProfit: 0n,
-    debt: 0n,
-    accruedDebtCost: 0n,
+    grossCollateral: 0n,
+    netCollateral: 0n,
+    grossDebt: 0n,
+    netDebt: 0n,
     fees_long: 0n,
     fees_short: 0n,
     cashflowBase: 0n,
@@ -52,9 +52,22 @@ const handleMigrateBase = async ({ position, debtToken, collateralToken, organis
   const fillCost_short = position.shortCost * -1n
 
   const partialFillItemClose = await eventsToPartialFillItem({ position, debtToken, collateralToken, organisedEvents: getEventsForPositionId(oldContangoPositionId) })
+
+  const { longLots, shortLots } = await allocateInterestToLots({ ...filterLotsByAccountingType({ lots }), ...partialFillItemClose })
+  const { grossCollateral, netCollateral, grossDebt, netDebt } = getCollateralAndDebtFromLots({ longLots, shortLots })
   
   const fillItemClose: Mutable<FillItem> = {
     ...partialFillItemClose,
+    grossCollateralBefore: grossCollateral,
+    grossCollateralAfter: 0n,
+    netCollateralBefore: netCollateral,
+    netCollateralAfter: 0n,
+    grossDebtBefore: grossDebt,
+    grossDebtAfter: 0n,
+    netDebtBefore: netDebt,
+    netDebtAfter: 0n,
+    collateralDelta: -netCollateral,
+    debtDelta: -netDebt,
     cashflow: 0n,
     cashflowToken_id: debtToken.id,
     id: createFillItemId({ ...swapEvent, positionId: oldContangoPositionId }),
@@ -75,12 +88,21 @@ const handleMigrateBase = async ({ position, debtToken, collateralToken, organis
     fillItemType: FillItemType.MigrateBaseCurrencyClose,
     fillCost_long,
     fillCost_short,
-    fillPrice_long: calculateFillPrice({ fillCost: fillCost_long, unit: collateralToken.unit, delta: position.collateral }),
-    fillPrice_short: calculateFillPrice({ fillCost: fillCost_short, unit: debtToken.unit, delta: position.debt }),
+    fillPrice_long: calculateFillPrice({ fillCost: fillCost_long, unit: collateralToken.unit, delta: position.netCollateral }),
+    fillPrice_short: calculateFillPrice({ fillCost: fillCost_short, unit: debtToken.unit, delta: position.netDebt }),
   } as const satisfies FillItem
 
+  const openingPartialFillItem = await eventsToPartialFillItem({ position, debtToken, collateralToken, organisedEvents: getEventsForPositionId(newContangoPositionId) })
   const openingFillItem: FillItem = {
-    ...(await eventsToPartialFillItem({ position, debtToken, collateralToken, organisedEvents: getEventsForPositionId(newContangoPositionId) })),
+    ...openingPartialFillItem,
+    grossCollateralBefore: 0n,
+    grossCollateralAfter: openingPartialFillItem.collateralDelta,
+    netCollateralBefore: 0n,
+    netCollateralAfter: openingPartialFillItem.collateralDelta,
+    grossDebtBefore: 0n,
+    grossDebtAfter: openingPartialFillItem.debtDelta,
+    netDebtBefore: 0n,
+    netDebtAfter: openingPartialFillItem.debtDelta,
     id: createFillItemId({ ...swapEvent, positionId: newContangoPositionId }),
     cashflowToken_id: debtToken.id,
     cashflow: 0n,
@@ -105,26 +127,26 @@ const handleMigrateBase = async ({ position, debtToken, collateralToken, organis
     fillItemType: FillItemType.MigrateBaseCurrencyOpen,
     fillCost_long: position.longCost,
     fillCost_short: position.shortCost,
-    fillPrice_long: calculateFillPrice({ fillCost: position.longCost, unit: collateralToken.unit, delta: position.collateral }),
-    fillPrice_short: calculateFillPrice({ fillCost: position.shortCost, unit: debtToken.unit, delta: position.debt }),
+    fillPrice_long: calculateFillPrice({ fillCost: position.longCost, unit: collateralToken.unit, delta: position.netCollateral }),
+    fillPrice_short: calculateFillPrice({ fillCost: position.shortCost, unit: debtToken.unit, delta: position.netDebt }),
   } as const satisfies FillItem
 
   const cashflowBase = mulDiv(position.cashflowBase + fillItemClose.cashflowBase, swapEvent.amountOut, swapEvent.amountIn)
   const realisedPnl_short = mulDiv(position.realisedPnl_short, swapEvent.amountOut, swapEvent.amountIn)
   const fees_short = mulDiv(position.fees_short + partialFillItemClose.fee_short, swapEvent.amountOut, swapEvent.amountIn)
 
-  const newPosition = {
+  const newPosition: Position = {
     ...position,
     instrument_id: createInstrumentId({ chainId: swapEvent.chainId, instrumentId: newContangoPositionId }),
-    collateral: openingFillItem.collateralDelta,
-    debt: openingFillItem.debtDelta,
+    grossCollateral: openingFillItem.collateralDelta,
+    netCollateral: openingFillItem.collateralDelta,
+    grossDebt: openingFillItem.debtDelta,
+    netDebt: openingFillItem.debtDelta,
     createdAtBlock: swapEvent.blockNumber,
     createdAtTimestamp: swapEvent.blockTimestamp,
     createdAtTransactionHash: swapEvent.transactionHash,
     id: idOfNewPosition,
     contangoPositionId: newContangoPositionId,
-    accruedLendingProfit: 0n,
-    accruedDebtCost: 0n,
     fees_long: position.fees_long + partialFillItemClose.fee_long,
     fees_short,
     cashflowBase,
@@ -161,20 +183,19 @@ const handleMigrateBase = async ({ position, debtToken, collateralToken, organis
   return { oldPosition, newPosition, lots: newLots, saveResult }
 }
 
-const handleMigrateLendingMarket = async ({ position, lots, debtToken, collateralToken, organisedEvents, newContangoPositionId }: { newContangoPositionId: string; position: Position; lots: Lot[]; debtToken: Token; collateralToken: Token; organisedEvents: OrganisedEvents }) => {
+const handleMigrateLendingMarket = async ({ position, lots, debtToken, collateralToken, organisedEvents, newContangoPositionId }: { lots: Lot[]; newContangoPositionId: string; position: Position; debtToken: Token; collateralToken: Token; organisedEvents: OrganisedEvents }) => {
   const { feeEvents, transferEvents, allEvents } = organisedEvents
   const genericEvent = allEvents[0]
   const { blockNumber, blockTimestamp: timestamp, chainId, transactionHash } = genericEvent
-
   const indexOfEndOfClose = allEvents.findIndex(e => e.eventType === EventType.TRANSFER_NFT && e.contangoPositionId === newContangoPositionId)
   const idOfNewPosition = createIdForPosition({ chainId, contangoPositionId: newContangoPositionId })
 
   const oldPosition: Position = {
     ...position,
-    collateral: 0n,
-    accruedLendingProfit: 0n,
-    debt: 0n,
-    accruedDebtCost: 0n,
+    grossCollateral: 0n,
+    netCollateral: 0n,
+    grossDebt: 0n,
+    netDebt: 0n,
     fees_long: 0n,
     fees_short: 0n,
     cashflowBase: 0n,
@@ -189,24 +210,26 @@ const handleMigrateLendingMarket = async ({ position, lots, debtToken, collatera
   const oldPositionEvents = organiseEvents(allEvents.slice(0, indexOfEndOfClose))
   const newPositionEvents = organiseEvents(allEvents.slice(indexOfEndOfClose))
 
-  const { prices, converters } = getPricesFromLots({ longLots: lots.filter(l => l.accountingType === AccountingType.Long), debtToken, collateralToken })
+  const { prices, converters } = getPricesFromLots({ ...filterLotsByAccountingType({ lots }), debtToken, collateralToken })
   const fees = withFees({ feeEvents, positionUpsertedEvents: [], converters, collateralToken, debtToken })
   const cashflows = withCashflows({ owner: position.owner, converters, chainId: position.chainId, debtToken, collateralToken, transferEvents, prices, fee_long: 0n, fee_short: 0n, liquidationEvents: [] })
   const debtAndCollateral = calculateDebtAndCollateral({ ...oldPositionEvents, converters, position })
   const { lendingProfitToSettle, debtCostToSettle } = debtAndCollateral
   const debtAndCollateralNew = calculateDebtAndCollateral({ ...newPositionEvents, converters, position })
 
-  const { longLots, shortLots } = await allocateInterestToLots({ lots, lendingProfitToSettle, debtCostToSettle })
+  const { longLots, shortLots } = await allocateInterestToLots({ ...filterLotsByAccountingType({ lots }), lendingProfitToSettle, debtCostToSettle })
+  const { grossCollateral, netCollateral, grossDebt, netDebt } = getCollateralAndDebtFromLots({ longLots, shortLots })
+
   const newLots = [...longLots, ...shortLots].map((lot, idx) => ({ ...lot, position_id: idOfNewPosition, contangoPositionId: newContangoPositionId, id: createIdForLot({ chainId, positionId: newContangoPositionId, index: idx }) }))
 
-  const newPosition = {
+  const newPosition: Position = {
     ...position,
     id: idOfNewPosition,
     contangoPositionId: newContangoPositionId,
-    collateral: debtAndCollateralNew.collateralDelta,
-    debt: debtAndCollateralNew.debtDelta,
-    accruedLendingProfit: position.accruedLendingProfit + lendingProfitToSettle,
-    accruedDebtCost: position.accruedDebtCost + debtCostToSettle,
+    grossCollateral: debtAndCollateralNew.collateralDelta,
+    netCollateral: debtAndCollateralNew.collateralDelta,
+    grossDebt: debtAndCollateralNew.debtDelta,
+    netDebt: debtAndCollateralNew.debtDelta,
     fees_long: position.fees_long + fees.fee_long,
     fees_short: position.fees_short + fees.fee_short,
     cashflowBase: position.cashflowBase + cashflows.cashflowBase,
@@ -214,7 +237,7 @@ const handleMigrateLendingMarket = async ({ position, lots, debtToken, collatera
     realisedPnl_long: position.realisedPnl_long,
     realisedPnl_short: position.realisedPnl_short,
     longCost: position.longCost - debtCostToSettle,
-    shortCost: position.shortCost + lendingProfitToSettle
+    shortCost: position.shortCost + lendingProfitToSettle,
   }
 
   const migrateLendingMarketFillItem: FillItem = {
@@ -227,6 +250,14 @@ const handleMigrateLendingMarket = async ({ position, lots, debtToken, collatera
     ...debtAndCollateral,
     collateralDelta: 0n,
     debtDelta: cashflows.cashflowQuote * -1n,
+    grossCollateralBefore: grossCollateral,
+    grossCollateralAfter: grossCollateral,
+    netCollateralBefore: netCollateral,
+    netCollateralAfter: netCollateral,
+    grossDebtBefore: grossDebt,
+    grossDebtAfter: grossDebt,
+    netDebtBefore: netDebt,
+    netDebtAfter: netDebt,
     ...fees,
     ...cashflows,
     ...prices,
@@ -268,9 +299,9 @@ export const handleMigrations = async ({ position, lots, debtToken, collateralTo
 
   switch (migrationType) {
     case MigrationType.MigrateBaseCurrency:
-      return handleMigrateBase({ position, debtToken, collateralToken, organisedEvents, newContangoPositionId })
+      return handleMigrateBase({ lots, position, debtToken, collateralToken, organisedEvents, newContangoPositionId })
     case MigrationType.MigrateLendingMarket:
-      return handleMigrateLendingMarket({ position, lots, debtToken, collateralToken, organisedEvents, newContangoPositionId })
+      return handleMigrateLendingMarket({ lots, position, debtToken, collateralToken, organisedEvents, newContangoPositionId })
     case MigrationType.MigrateQuoteCurrency:
       throw new Error(`Migrate quote currency not implemented`)
     default:
