@@ -15,6 +15,7 @@ import { createEventId } from "../utils/ids";
 import { positionIdMapper } from "../utils/mappers";
 import { mulDiv } from "../utils/math-helpers";
 import { EventType, LiquidationEvent } from "../utils/types";
+import { getPositionForProxy } from "./common";
 
 // Aave
 export function getLiquidationBonus(data: bigint): bigint {
@@ -86,9 +87,8 @@ const isV3 = (mm: number) => ![10, 9, 11, 15].includes(mm)
 type AaveLiquidationEvent = AaveLiquidations_LiquidateAave_event | AaveLiquidations_LiquidateAgave_event | AaveLiquidations_LiquidateRadiant_event
 
 const processAndSaveLiquidation = async (event: AaveLiquidationEvent, collateralAsset: string, context: handlerContext) => {
-  const snapshot = await eventProcessor.getOrLoadSnapshotFromProxyAddress(event, event.params.user, context)
-  if (!snapshot) return
-  const { position } = snapshot
+  const position = await getPositionForProxy({ chainId: event.chainId, proxyAddress: event.params.user, context })
+  if (!position) return
   const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
 
   const aaveLiquidationEvent = await processAaveLiquidationEvents({

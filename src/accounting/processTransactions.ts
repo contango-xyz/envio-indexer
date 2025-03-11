@@ -1,16 +1,13 @@
-import { Token, Lot, Position, handlerContext, ContangoLiquidationEvent } from "generated/src/Types.gen"
-import { StoreKey, createStoreKey, createStoreKeyFromEvent, decodeStoreKey } from "../utils/ids"
-import { PositionUpsertedEvent, ContangoEvents, EventType } from "../utils/types"
+import { Lot, Position, Token, handlerContext } from "generated/src/Types.gen"
 import { getPairForPositionId, getPosition } from "../utils/common"
-import { loadLots } from "./helpers/saveAndLoad"
+import { StoreKey, createStoreKey, createStoreKeyFromEvent, decodeStoreKey } from "../utils/ids"
 import { singletonPromise } from "../utils/promise"
-import { OrganisedEvents, organiseEvents } from "./helpers/eventStore"
-import { processEventsForPosition } from "./processEvents"
-import { debounce } from "../utils/debounce"
+import { ContangoEvents, EventType } from "../utils/types"
+import { organiseEvents } from "./helpers/eventStore"
 import { handleMigrations } from "./helpers/migrations"
+import { loadLots } from "./helpers/saveAndLoad"
 import { GenericEvent } from "./lotsAccounting"
-import { createUnderlyingPositionId } from "../ContangoProxy"
-import { Hex } from "viem"
+import { processEventsForPosition } from "./processEvents"
 
 type PositionSnapshot = {
   position: Position // this will be a snapshot of the position that the transaction is relevant to. In case of a migration, this will be the old position.
@@ -125,7 +122,7 @@ class EventProcessor {
     if (!processorMaybe) {
       this.processors.set(chainId, new TransactionProcessor(transactionKey))
     } else if (processorMaybe.transactionKey !== transactionKey) {
-      // processorMaybe.cleanup(context)
+      processorMaybe.cleanup(context)
       const newProcessor = new TransactionProcessor(transactionKey)
       this.processors.set(chainId, newProcessor)
     }
@@ -134,17 +131,6 @@ class EventProcessor {
       throw new Error(`Processor for chainId ${chainId} and transactionKey ${transactionKey} has changed`)
     }
     return processor
-  }
-
-  // only intended for testing
-  async manualCleanup(transactionKey: StoreKey, context: handlerContext) {
-    const { chainId } = decodeStoreKey(transactionKey)
-    const processor = this.processors.get(chainId)
-    if (processor) {
-      const result = await processor.cleanup(context)
-      this.processors.delete(chainId)
-      return result
-    }
   }
 
   async processEvent(event: ContangoEvents, context: handlerContext) {
@@ -160,20 +146,6 @@ class EventProcessor {
     return transactionProcessor.getOrLoadSnapshot(positionId, context)
   }
 
-  private async getPositionIdForProxyAddress(event: GenericEvent, proxyAddress: string, context: handlerContext) {
-    const { chainId } = event
-    const underlyingPosition = await context.UnderlyingPositionFactory_UnderlyingPositionCreated.get(createUnderlyingPositionId({ chainId, proxyAddress }))
-    if (!underlyingPosition) return null
-    return underlyingPosition.contangoPositionId as Hex
-  }
-
-  async getOrLoadSnapshotFromProxyAddress(event: GenericEvent, proxyAddress: string, context: handlerContext) {
-    const transactionKey = createStoreKeyFromEvent(event)
-    const transactionProcessor = await this.getTransactionProcessorAndRunCleanup(event.chainId, transactionKey, context)
-    const positionId = await this.getPositionIdForProxyAddress(event, proxyAddress, context)
-    if (!positionId) return null
-    return transactionProcessor.getOrLoadSnapshot(positionId, context)
-  }
 }
 
 export const eventProcessor = EventProcessor.getInstance()

@@ -1,13 +1,13 @@
 import { ExactlyLiquidations } from "generated";
-import { eventProcessor } from "../accounting/processTransactions";
 import { getInterestToSettleOnLiquidation } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { EventType, LiquidationEvent } from "../utils/types";
+import { getPositionForProxy } from "./common";
+import { eventProcessor } from "../accounting/processTransactions";
 
 ExactlyLiquidations.LiquidateExactly.handler(async ({ event, context }) => {
-  const snapshot = await eventProcessor.getOrLoadSnapshotFromProxyAddress(event, event.params.borrower, context)
-  if (!snapshot) return
-  const { position } = snapshot
+  const position = await getPositionForProxy({ chainId: event.chainId, proxyAddress: event.params.borrower, context })
+  if (!position) return
   const { contangoPositionId } = position
 
   const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })

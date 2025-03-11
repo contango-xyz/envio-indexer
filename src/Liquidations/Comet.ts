@@ -3,12 +3,11 @@ import { eventProcessor } from "../accounting/processTransactions";
 import { getBalancesAtBlock, getERC20Balance, getInterestToSettleOnLiquidation } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { EventType, LiquidationEvent } from "../utils/types";
-import { erc20Abi, getContract } from "viem";
+import { getPositionForProxy } from "./common";
 
 CometLiquidations.AbsorbCollateral.handler(async ({ event, context }) => {
-  const snapshot = await eventProcessor.getOrLoadSnapshotFromProxyAddress(event, event.params.borrower, context)
-  if (!snapshot) return
-  const { position } = snapshot
+  const position = await getPositionForProxy({ chainId: event.chainId, proxyAddress: event.params.borrower, context })
+  if (!position) return
   const { contangoPositionId } = position
   
   const { lendingProfitToSettle, debtCostToSettle, collateralBefore, debtBefore } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })

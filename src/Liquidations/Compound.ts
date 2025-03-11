@@ -5,14 +5,14 @@ import { clients } from "../clients";
 import { getInterestToSettleOnLiquidation } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { EventType, LiquidationEvent } from "../utils/types";
+import { getPositionForProxy } from "./common";
 
 const abi = parseAbi(["function exchangeRateCurrent() external view returns (uint256)"])
 export const wadMul = (a: bigint, b: bigint) => (a * b) / BigInt(1e18)
 
 CompoundLiquidations.LiquidateCompound.handler(async ({ event, context }) => {
-  const snapshot = await eventProcessor.getOrLoadSnapshotFromProxyAddress(event, event.params.borrower, context)
-  if (!snapshot) return
-  const { position } = snapshot
+  const position = await getPositionForProxy({ chainId: event.chainId, proxyAddress: event.params.borrower, context })
+  if (!position) return
   const { contangoPositionId } = position
 
   const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })

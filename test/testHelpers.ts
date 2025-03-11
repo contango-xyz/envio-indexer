@@ -76,11 +76,16 @@ const abiItems = {
     'LiquidateDolomite': getAbiItem({ abi: liquidationsAbi, name: "LogLiquidate" }),
     'LiquidateEuler': getAbiItem({ abi: liquidationsAbi, name: "Liquidate" }),
     'LiquidateMorpho': getAbiItem({ abi: liquidationsAbi, name: "Liquidate" }),
-    'LiquidateSilo': getAbiItem({ abi: liquidationsAbi, name: "Liquidate" }),
     'LiquidateAave': getAbiItem({ abi: liquidationsAbi, name: "LiquidationCall" }),
     'LiquidateAgave': getAbiItem({ abi: liquidationsAbi, name: "LiquidationCall" }),
     'LiquidateRadiant': getAbiItem({ abi: liquidationsAbi, name: "LiquidationCall" }),
     'LiquidateCompound': getAbiItem({ abi: liquidationsAbi, name: "LiquidateBorrow" }),
+    'LiquidateSilo': getAbiItem({
+      abi: parseAbi([
+        'event Liquidate(address indexed asset, address indexed user, uint256 shareAmountRepaid, uint256 seizedCollateral)'
+      ]),
+      name: 'Liquidate',
+    })
   }
 }
 

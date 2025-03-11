@@ -1,11 +1,10 @@
 import { Position, Token } from "generated";
 import { getLiquidationPenalty } from "../Liquidations/common";
-import { FillItemType } from "../utils/types";
 import { withCashflows } from "./helpers/cashflows";
 import { calculateDebtAndCollateral } from "./helpers/debtAndCollateral";
+import { OrganisedEvents } from "./helpers/eventStore";
 import { withFees } from "./helpers/fees";
 import { ReferencePriceSource, calculateFillPrice, getPrices } from "./helpers/prices";
-import { OrganisedEvents } from "./helpers/eventStore";
 
 
 export const eventsToPartialFillItem = async ({ position, debtToken, collateralToken, organisedEvents }: { position: Position; debtToken: Token; collateralToken: Token; organisedEvents: OrganisedEvents }) => {

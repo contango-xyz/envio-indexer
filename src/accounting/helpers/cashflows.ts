@@ -2,7 +2,7 @@ import { Token } from "generated";
 import { zeroAddress } from "viem";
 import { ADDRESSES, wrappedNativeMap } from "../../utils/constants";
 import { createTokenId } from "../../utils/getTokenDetails";
-import { absolute, mulDiv } from "../../utils/math-helpers";
+import { absolute } from "../../utils/math-helpers";
 import { LiquidationEvent, TransferEvent } from "../../utils/types";
 import { PriceConverters, ReferencePrices } from "./prices";
 

@@ -4,7 +4,6 @@ import { eventsToPartialFillItem } from "./helpers";
 import { OrganisedEvents } from "./helpers/eventStore";
 import { saveFillItem, savePosition } from "./helpers/saveAndLoad";
 import { updateLots } from "./lotsAccounting";
-import { absolute } from "../utils/math-helpers";
 
 export const processEventsForPosition = async (
   {

@@ -882,6 +882,12 @@ describe('indexer tests', () => {
         liquidationTxHashes: ['0x7257788de7d17094d7f65cba97558daf1f2f4e7dae2bd1a401c901c55a1b5717'],
         description: 'Aave v3 liquidation'
       },
+      {
+        chainId: arbitrum.id,
+        positionId: '0x54414e474f555344430000000000000010ffffffff0000000000000000005664',
+        liquidationTxHashes: ['0x04a053418b3df6943d1ab8b9e4e38f0542a8fe20329da5862c289ed4eb3d73ae'],
+        description: 'TANGO/USDC.e - SILO'
+      }
       // Add more test cases here as needed
     ];
 
@@ -899,6 +905,11 @@ describe('indexer tests', () => {
         
         for (let i = 0; i < transactionHashes.length; i++) {
           mockDb = await processTransaction(transactionHashes[i], mockDb);
+          const { fillItem, position } = await getAssertionValues(id)
+          if (fillItem.fillItemType === FillItemType.Liquidated || fillItem.fillItemType === FillItemType.LiquidatedFully) {
+            expect(fillItem.fillPrice_long).to.not.equal(0n)
+            expect(fillItem.fillPrice_short).to.not.equal(0n)
+          }
         }
 
         await highLevelInvariantsForLiquidation(id);

@@ -1,13 +1,14 @@
-import { ContangoLiquidationEvent, DolomiteLiquidations } from "generated";
-import { eventProcessor } from "../accounting/processTransactions";
+import { DolomiteLiquidations } from "generated";
 import { getInterestToSettleOnLiquidation } from "../utils/common";
 import { createEventId } from "../utils/ids";
 import { EventType, LiquidationEvent } from "../utils/types";
+import { getPositionForProxy } from "./common";
+import { eventProcessor } from "../accounting/processTransactions";
+
 
 DolomiteLiquidations.LiquidateDolomite.handler(async ({ event, context }) => {
-  const snapshot = await eventProcessor.getOrLoadSnapshotFromProxyAddress(event, event.params.solidAccountOwner, context)
-  if (!snapshot) return
-  const { position } = snapshot
+  const position = await getPositionForProxy({ chainId: event.chainId, proxyAddress: event.params.solidAccountOwner, context })
+  if (!position) return
   const { contangoPositionId } = position
 
   const { lendingProfitToSettle, debtCostToSettle } = await getInterestToSettleOnLiquidation({ chainId: event.chainId, blockNumber: event.block.number, position })
