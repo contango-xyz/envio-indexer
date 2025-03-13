@@ -123,6 +123,7 @@ type Position {
   shortCost: BigInt!
 
   migratedTo_id: String
+  claimableLiquidationDust: ClaimableLiquidationDust
 }
 
 type Token {
@@ -284,6 +285,12 @@ type EndStrategyEvent {
   blockTimestamp: Int!
   transactionHash: String!
   contangoPositionId: String!
+}
+
+type ClaimableLiquidationDust {
+  id: ID! # `${position_id}_claimable`
+  amount: BigInt!
+  token: Token!
 }
 
 type ContangoLiquidationEvent {

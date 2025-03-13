@@ -49,6 +49,7 @@ export const createPosition = async (
     longCost: 0n,
     shortCost: 0n,
     migratedTo_id: undefined,
+    claimableLiquidationDust_id: undefined,
   }
 
   context.Position.set(newPosition)
