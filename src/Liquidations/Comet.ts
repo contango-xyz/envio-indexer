@@ -29,6 +29,7 @@ CometLiquidations.AbsorbCollateral.handler(async ({ event, context }) => {
       token_id: token.id,
     }
 
+    context.ClaimableLiquidationDust.set(claim)
     context.Position.set({
       ...position,
       claimableLiquidationDust_id: claim.id,
