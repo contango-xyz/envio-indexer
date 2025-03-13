@@ -55,7 +55,7 @@ export const updateTvl = async ({ position, quoteToken, newCashflowQuote, oldCas
     id,
     chainId: position.chainId,
     token_id: quoteToken.id,
-    tvl: (tvl?.tvl || 0n) + delta,
+    tvl: max((tvl?.tvl || 0n) + delta, 0n),
   }
   context.TVL.set(entry)
 }
