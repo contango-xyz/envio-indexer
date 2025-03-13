@@ -104,3 +104,18 @@ IMoneyMarket.Withdrawn.handler(async ({ event, context }) => {
   await eventProcessor.processEvent(entity, context)
 
 }, { wildcard: true })
+
+IMoneyMarket.Retrieved.handler(async ({ event, context }) => {
+  // there are other events that match this wildcard event signature. We check if this position exists to ensure we only process the correct event
+  // using the `registerContract` function from envio results in terrible performance loss, so this is preferred
+  const position = await getPositionSafe({ chainId: event.chainId, positionId: event.params.positionId, context })
+  if (!position) return
+  
+  if (position.claimableLiquidationDust_id) {
+    const claim = await context.ClaimableLiquidationDust.get(position.claimableLiquidationDust_id)
+    if (claim && claim.token_id === createTokenId({ chainId: event.chainId, address: event.params.token })) {
+      context.Position.set({ ...position, claimableLiquidationDust_id: undefined })
+      context.ClaimableLiquidationDust.set({ ...claim, claimedAtTransactionHash: event.transaction.hash })
+    }
+  }
+}, { wildcard: true })

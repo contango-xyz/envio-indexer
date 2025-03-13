@@ -27,6 +27,9 @@ CometLiquidations.AbsorbCollateral.handler(async ({ event, context }) => {
       id: `${position.id}_claimable`,
       amount: proxyBalance,
       token_id: token.id,
+      claimedAtTransactionHash: undefined,
+      chainId: event.chainId,
+      contangoPositionId,
     }
 
     context.ClaimableLiquidationDust.set(claim)

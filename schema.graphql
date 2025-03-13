@@ -289,8 +289,11 @@ type EndStrategyEvent {
 
 type ClaimableLiquidationDust {
   id: ID! # `${position_id}_claimable`
+  chainId: Int!
   amount: BigInt!
   token: Token!
+  claimedAtTransactionHash: String
+  contangoPositionId: String!
 }
 
 type ContangoLiquidationEvent {
